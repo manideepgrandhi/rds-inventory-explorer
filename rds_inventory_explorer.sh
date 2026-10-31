@@ -15,10 +15,11 @@ set -Eeuo pipefail
 umask 077 2>/dev/null || true
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="2.3.2"
+readonly SCRIPT_VERSION="2.4.0"
 readonly DATA_SCHEMA="rds-inventory-explorer/data" DATA_SCHEMA_VERSION=1
 # Insights audit checks (lib/insights.jq); --skip-checks takes these ids, plus baseline / baseline:<parameter>
-readonly CHECK_IDS="public_access storage_not_encrypted deletion_protection_off copy_tags_off single_az backup_retention_low iam_auth_off ca_expiring auto_minor_off pi_off em_off no_log_exports default_port default_master_user old_generation gp2_storage stopped default_param_group ssl_not_forced tls_old_enabled conn_logging_off md5_password param_pending_reboot"
+readonly CHECK_IDS="public_access storage_not_encrypted deletion_protection_off copy_tags_off single_az backup_retention_low iam_auth_off ca_expiring auto_minor_off pi_off em_off no_log_exports default_port default_master_user old_generation gp2_storage stopped default_param_group param_pending_reboot"
+readonly RETIRED_CHECK_IDS="ssl_not_forced tls_old_enabled conn_logging_off md5_password"   # 2.4.0: now baseline rules; still accepted by --skip-checks
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB_DIR="${RDS_EXPLORER_LIB:-$SCRIPT_DIR/lib}"
@@ -28,7 +29,7 @@ CSV_LIB="$LIB_DIR/csv.jq"
 MERGE_LIB="$LIB_DIR/merge.jq"
 INSIGHTS_LIB="$LIB_DIR/insights.jq"
 PARAMS_LIB="$LIB_DIR/parameters.jq"
-PARAMS_LIST="$LIB_DIR/parameters.list"
+PARAMS_LIST="${RIE_PARAMS_LIST:-$LIB_DIR/parameters.list}"   # RIE_PARAMS_LIST: another list file (the tests use their own)
 BASELINE_LIB="$LIB_DIR/baseline.jq"
 BASELINE_PARSE="$LIB_DIR/baseline_parse.jq"
 BASELINE_DEFAULT="$LIB_DIR/parameters.baseline.example"
@@ -251,6 +252,7 @@ validate() {
     done
     for x in "${SKIP_CHECKS[@]}"; do
         [[ "$x" == baseline || "$x" =~ ^baseline:[A-Za-z0-9_.()\ -]{1,128}$ ]] && continue
+        [[ " $RETIRED_CHECK_IDS " == *" $x "* ]] && continue
         [[ " $CHECK_IDS " == *" $x "* ]] || die 1 "Unknown check '$x' for --skip-checks (known: ${CHECK_IDS// /, })"
     done
     if [[ ! "$PROBE_PARALLEL" =~ ^[0-9]+$ ]] || (( 10#$PROBE_PARALLEL < 1 || 10#$PROBE_PARALLEL > 32 )); then die 1 "--probe-parallel must be 1-32"; fi
@@ -406,7 +408,7 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
 # An error (AccessDenied ...) is recorded on that group and in the error list; never fatal.
 # shellcheck disable=SC2016  # a jq program, single-quoted on purpose
 PARAM_FILTER='def section: if test("^aurora-postgresql") then "aurora-postgresql" elif test("^aurora-mysql|^aurora[0-9.]*$") then "aurora-mysql"
-        elif test("^postgres") then "postgres" elif test("^(mysql|mariadb)") then "mysql" elif test("^sqlserver") then "sqlserver"
+        elif test("^postgres") then "rds-postgres" elif test("^(mysql|mariadb)") then "mysql" elif test("^sqlserver") then "sqlserver"
         elif test("^(custom-)?oracle") then "oracle" else null end;
     ($list[0][$fam | section] // []) as $keep
     | [.[] | select(.ParameterName as $n | $keep | index([$n])) | {Name: .ParameterName, ParameterValue, Source, ApplyType, IsModifiable, DataType,
@@ -419,8 +421,10 @@ params_list_json() {   # lib/parameters.list -> {"section": ["name", ...]}
             if [[ "$line" =~ ^\[([a-z0-9-]+)\]$ ]]; then sec="${BASH_REMATCH[1]}"; continue; fi
             [[ -n "$sec" ]] && printf '%s\t%s\n' "$sec" "$line"
         done <"$PARAMS_LIST"; } | jq -Rsc --argjson bl "$BL_JSON" 'split("\n") | map(select(length > 0) | split("\t"))
+            # a legacy [postgres] section covers RDS and Aurora PostgreSQL
+            | map(if .[0] == "postgres" then (["rds-postgres", .[1]], ["aurora-postgresql", .[1]]) else . end)
             # every baseline parameter is collected too (postgres / mysql rules cover RDS and Aurora)
-            + [($bl // {rules: []}).rules[] | .param as $p | {postgres: ["postgres", "aurora-postgresql"], mysql: ["mysql", "aurora-mysql"]}[.family] // [.family] | .[] | [., $p]]
+            + [($bl // {rules: []}).rules[] | .param as $p | {postgres: ["rds-postgres", "aurora-postgresql"], mysql: ["mysql", "aurora-mysql"]}[.family] // [.family] | .[] | [., $p]]
             | group_by(.[0]) | map({key: .[0][0], value: (map(.[1]) | unique)}) | from_entries'
 }
 param_fetch() {   # param_fetch <out> <profile> <region> <op> <args...>: Parameters (filtered for $fam) -> <out>, 1 on error

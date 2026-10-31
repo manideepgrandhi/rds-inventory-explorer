@@ -1,6 +1,7 @@
 # parameters.list - parameters the Parameters tab shows (rds_inventory_explorer.sh --with-parameters).
 # One [section] per engine family; one parameter name per line; # comments. Edit freely: only these names are kept.
-# Sections: aurora-postgresql, postgres, sqlserver, oracle, mysql, aurora-mysql (mariadb uses mysql).
+# Sections: aurora-postgresql, rds-postgres, sqlserver, oracle, mysql, aurora-mysql (mariadb uses mysql).
+# A [postgres] section (lists before 2.4.0) still works and applies to both Aurora and RDS PostgreSQL.
 # Oracle: sqlnet encryption / checksum settings live in the OPTION group (NATIVE_NETWORK_ENCRYPTION), not here.
 
 [aurora-postgresql]
@@ -36,7 +37,7 @@ max_replication_slots
 #apg_plan_mgmt.capture_plan_baselines
 #apg_plan_mgmt.use_plan_baselines
 
-[postgres]
+[rds-postgres]
 rds.force_ssl
 #ssl_min_protocol_version
 #password_encryption

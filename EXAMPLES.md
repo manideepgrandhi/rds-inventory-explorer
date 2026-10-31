@@ -13,19 +13,20 @@
 # Skip Insights checks you do not care about
 ./rds_inventory_explorer.sh -A --skip-checks default_port,gp2_storage,stopped
 
-# Parameters tab: effective values of the curated parameters, drift, parameter Insights checks (+ _parameters.csv)
+# Parameters tab: effective values of the curated parameters (+ _parameters.csv)
 ./rds_inventory_explorer.sh -P prod -A --with-parameters -F html,csv
 
 # Check every resource against your parameter baseline (copy the bundled one outside the release folder first)
 cp lib/parameters.baseline.example ~/parameters.baseline
 ./rds_inventory_explorer.sh -P prod -A --with-parameters --baseline ~/parameters.baseline -F html,csv
-#   report.html#tab=parameters&pv=drift shows the off-baseline clusters and instances first; --baseline none turns it off
+#   report.html#tab=parameters&sh=problems shows the failing servers first; &sh=overridden the Aurora clusters with instance overrides
+#   --baseline none turns it off
 
 # Merge several accounts and check them all against one baseline
 ./rds_inventory_explorer.sh --merge ~/Downloads/rds --baseline ~/parameters.baseline -o ~/Downloads/rds/merged
 
-# Open a report on the parameter group view or on one group's drift
-#   report.html#tab=parameters&pv=group     report.html#tab=parameters&pv=drift
+# Open a report on the parameter group view, or on one engine's baseline rule fleet-wide
+#   report.html#tab=parameters&pv=group     report.html#tab=parameters&pe=aurora-postgresql&bp=aurora-postgresql|log_connections
 
 # See the exact AWS calls first, without calling anything
 ./rds_inventory_explorer.sh -P prod -A --dry-run

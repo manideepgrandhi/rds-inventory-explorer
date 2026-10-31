@@ -47,7 +47,10 @@ calls(){ jq -r 'select(.[0] != "--version" and .[0] != "configure") | join(" ")'
 FLEET=(-P "prod,nonprod,broken" -A)
 # Test fixture: the bundled baseline with its commented PostgreSQL rules switched on
 mkdir -p "$OUT/fx"; FULLBL="$OUT/fx/parameters.baseline.example"
-sed -E 's/^# (postgres[[:space:]]*\|)/\1/' "$HERE/../lib/parameters.baseline.example" >"$FULLBL"
+cp "$HERE/mock/parameters.baseline.example" "$FULLBL"   # frozen test baseline: lib/parameters.baseline.example is yours to customise
+# ... and its own parameters list (the shipped one is user-edited; apg_plan_mgmt.* switched on for the Aurora checks)
+export RIE_PARAMS_LIST="$OUT/fx/parameters.list"
+sed -E 's/^#(apg_plan_mgmt\.)/\1/' "$HERE/../lib/parameters.list" >"$RIE_PARAMS_LIST"
 
 echo "== static"
 chk "shellcheck script + tests" shellcheck "$SCRIPT" "$HERE/run_tests.sh" "$HERE/validate_cli.sh"
@@ -58,7 +61,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.3\.2"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.4\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -230,7 +233,7 @@ chk "data file written next to the HTML" test -s "$SD"
 chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
 chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data*' 2>/dev/null)"
 dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
-dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.3.2" and .merged == false'
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.4.0" and .merged == false'
 dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
 dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
 dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
@@ -366,9 +369,9 @@ has aud err "parameter step [0-9.]+s"
 jqt aud '.parameters.collected and .parameters.elapsed_ms >= 0 and .meta.parameters.requested'
 jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values.log_connections | .v, .from] == ["1", "instance"]'
 jqt aud '[.parameters.rows[] | select(.name == "pay-aurora-use1") | .values.log_connections | .v, .from] == ["0", "cluster"]'
-jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values["rds.force_ssl"] | .v, .from, .flag] == ["0", "cluster", "SSL not forced"]'
+jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values["rds.force_ssl"] | .v, .from] == ["0", "cluster"]'
 jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values["apg_plan_mgmt.capture_plan_baselines"] | .v, .src] == ["automatic", "system"]'
-jqt aud '[.parameters.rows[] | select(.name == "hr-sqlserver") | .values["rds.tls10"] | .v, .src, .flag] == ["enabled", "system", "TLS 1.0 enabled"]'
+jqt aud '[.parameters.rows[] | select(.name == "hr-sqlserver") | .values["rds.tls10"] | .v, .src] == ["enabled", "system"]'
 jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values.shared_buffers | .v, .approx] == ["{DBInstanceClassMemory/32768}", 2097152]'
 jqt aud '[.parameters.rows[] | select(.name == "orders-1") | .values.innodb_buffer_pool_size.approx] | .[0] > 0'
 jqt aud '[.parameters.rows[] | .values | keys[]] | index("unlisted_param") == null'
@@ -380,15 +383,15 @@ jqt aud '[.parameters.rows | map(.name) | index("pay-aurora-use1"), index("pay-u
 jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .global, .cluster_name] == ["pay-global", "pay-aurora-use1"]'
 jqt aud '[.parameters.groups[] | select(.name == "pay-apg16-instance") | .used_by[].name] == ["pay-use1-1", "pay-use1-2"]'
 jqt aud '[.parameters.groups[] | select(.is_default)] | length > 0 and all(.name | startswith("default."))'
-jqt aud '[.parameters.drift[] | select(.section == "postgres" and .param == "work_mem") | .values | length] == [3]'
+jqt aud '[.parameters.drift[] | select(.section == "rds-postgres" and .param == "work_mem") | .values | length] == [3]'
 jqt aud '[.insights.findings[] | select(.check == "default_param_group") | .sev] | unique == ["Medium"]'
 jqt aud '[.insights.findings[] | select(.check == "conn_logging_off") | .res_name] | index("pay-use1-1") == null'
 PCSV="$(find "$OUT/aud" -name '*_parameters.csv' | head -1)"
-chk "parameters CSV header" bash -c "head -1 '$PCSV' | tr -d '\r\357\273\277' | grep -qx 'Account,Region,Resource,Resource type,Cluster,Engine,Parameter,Value,Approx. computed,Source,From,Parameter group,Non-default,Flag,Apply type,Apply status'"
+chk "parameters CSV header" bash -c "head -1 '$PCSV' | tr -d '\r\357\273\277' | grep -qx 'Account,Region,Resource,Resource type,Cluster,Engine,Parameter,Value,Approx. computed,Source,From,Parameter group,Non-default,Apply type,Apply status'"
 chk "parameters CSV rows == values" test "$(($(wc -l <"$PCSV") - 1))" -eq "$(jq '[.parameters.rows[].values | length] | add' "$OUT/aud.json")"
 t noparams 0 fleet "${FLEET[@]}" -F html,csv
 chk "no --with-parameters: no parameter call and no parameters CSV" bash -c "! jq -r 'join(\" \")' '$MOCK_LOG' | tail -n 400 | grep -q 'parameters\b' ; test -z \"\$(find '$OUT/noparams' -name '*_parameters.csv')\""
-jqt noparams '(.parameters.collected | not) and ([.insights.checks[] | select(.not_run) | .id] | sort == ["conn_logging_off", "md5_password", "param_pending_reboot", "ssl_not_forced", "tls_old_enabled"])'
+jqt noparams '(.parameters.collected | not) and ([.insights.checks[] | select(.not_run) | .id] | sort == ["param_pending_reboot"])'
 jqt noparams '[.insights.findings[] | select(.check == "default_param_group")] | length > 0'
 t pdry 0 fleet -P prod -r us-east-1 --with-parameters --dry-run
 has pdry out "describe-db-parameters --db-parameter-group-name .{0,2}<group.{0,2} --source user"
@@ -418,7 +421,7 @@ jq '.accounts[0].account = "12345"' "$PSD" >"$OUT/p_badacct.json"; t pbadacct 3 
 
 echo "== parameter baseline"
 export MOCK_PG18=1
-chk "bundled baseline ships with every postgres rule commented out" test "$(grep -cE '^postgres[[:space:]]*\|' "$HERE/../lib/parameters.baseline.example")" -eq 0
+chk "bundled baseline ships with every postgres rule commented out" test "$(grep -cE '^(postgres|aurora-postgresql|rds-postgres)[[:space:]]*\|' "$HERE/../lib/parameters.baseline.example")" -eq 0
 t bl 0 fleet "${FLEET[@]}" --with-parameters --csv --save-data --baseline "$FULLBL"
 BLC="$(find "$OUT/bl" -name '*_baseline.csv' | head -1)"; BLH="$(find "$OUT/bl" -name '*.html' | head -1)"; BLD="$(find "$OUT/bl" -name '*_data.json' | head -1)"
 blr() { jq -c --arg n "$1" --arg p "$2" '[.parameters.rows[] | select(.name == $n) | .bl.results[] | select(.param == $p) | .status]' "$OUT/bl.json"; }
@@ -428,24 +431,47 @@ jqt bl '.baseline.sha256 == "'"$(sha256sum "$FULLBL" | cut -c1-64)"'"'
 blt analytics-pg18 log_connections '["pass"]'          # PG18: receipt,authentication,authorization,... list
 blt reports-pg18 log_connections '["fail"]'            # PG18: receipt only
 blt analytics-pg18 shared_preload_libraries '["pass"]' # " PGAUDIT " spaces + case
-jqt bl '[.parameters.rows[] | select(.name == "analytics-pg18") | .values.shared_preload_libraries.flag] == [null]'   # security flag: same case-insensitive trimmed set membership
-jqt bl '[.parameters.rows[] | select(.name == "legacy-pg") | .values.shared_preload_libraries.flag] == ["pgaudit not loaded"]'
-jqt bl '[.insights.findings[] | select((.res_id | endswith(":analytics-pg18")) and (tostring | test("pgaudit not loaded")))] == []'
+jqt bl '[.parameters.rows[] | .values[] | select(has("flag"))] == []'   # no built-in security flags: the baseline file is the only source of expected values
+jqt bl '[.insights.findings[] | select(tostring | test("pgaudit not loaded"))] == [] and ([.insights.checks[].id] | index("ssl_not_forced") == null)'
 blt pay-aurora-use1 shared_preload_libraries '["fail"]' # pg_tle missing
 jqt bl '[.parameters.rows[] | select(.name == "pay-aurora-use1") | .bl.results[] | select(.param == "shared_preload_libraries") | .why] == ["lacks pg_tle"]'
-blt legacy-apg-1 log_connections '["pass"]'           # PG13 boolean "on"
-blt legacy-apg-1 ssl_min_protocol_version '["n/a"]'   # not a PG13 parameter in the mock
-jqt bl '[.parameters.rows[] | select(.type == "cluster") | .bl.results[] | select(.status == "n/a")] == []'
+blt legacy-apg-1 log_connections '[]'                 # Aurora PostgreSQL member: checked on its cluster only
+jqt bl '[.parameters.rows[] | select(.section == "aurora-postgresql" and .type == "member" and .cluster_id != null) | .bl.results[]] == []'
+jqt bl '[.parameters.rows[] | select(.section == "aurora-postgresql" and .type == "cluster") | .bl.results | length] | all(. > 0)'
+jqt bl '[.parameters.rows[] | select(.type == "cluster" and .section != "aurora-postgresql") | .bl.results[] | select(.status == "n/a")] == []'
 jqt bl '[.parameters.rows[] | select(.engine | test("mysql")) | .bl.results[] | select(.param == "tls_version") | .rule] | (index("contains") != null and index("!contains") != null)'
 jqt bl '[.parameters.rows[] | select(.group_error) | .bl.results[].status] | unique == ["unknown"]'
 jqt bl '[.parameters.rows[] | .bl.results[] | select(.approx != null)] | length > 0'
 jqt bl '[.parameters.rows[] | select(.type == "cluster") | .bl.members.dev] | add > 0'
 jqt bl '.baseline.totals.off == ([.parameters.rows[] | select(.bl.dev > 0)] | length) and (.baseline.accounts | length == 2)'
 jqt bl '([.insights.findings[] | select(.check | startswith("baseline:"))] | length) == ([.parameters.rows[] | .bl.results[] | select(.status == "fail" or .status == "missing")] | length) - ([.parameters.rows[] | select(.type == "member") | .bl.results[] | select((.status == "fail" or .status == "missing") and .from == "cluster")] | length)'
+# overrides: Aurora PostgreSQL cluster value checked, instance groups that set another value are a note (not a failure)
+jqt bl '[.parameters.rows[] | select(.bl.overridden > 0)] | length > 0'
+jqt bl '[.parameters.rows[] | .bl.overrides[]? | (.value | ascii_downcase) != (.cluster_value | ascii_downcase)] | all'
+jqt bl '.baseline.totals.overridden == ([.parameters.rows[] | select(.bl.overridden > 0)] | length)'
+jqt bl '[.parameters.rows[] | select(.bl.overridden > 0) | .section] | unique == ["aurora-postgresql"]'
+jqt bl '[.parameters.rows[] | .bl.results[] | select(.overrides) | .status] | all(. != "instance-level")'
+chk "baseline CSV has the override column" bash -c "head -1 '$BLC' | tr -d '\r\357\273\277' | grep -q ',Overridden on (instance=value)$'"
 chk "baseline CSV header" bash -c "head -1 '$BLC' | tr -d '\r\357\273\277' | grep -q '^Account,'"
 chk "baseline CSV rows == results" test "$(($(wc -l <"$BLC") - 1))" -eq "$(jq '[.parameters.rows[].bl.results[]] | length' "$OUT/bl.json")"
 chk "baseline CSV: no cell starts with = + - @" bash -c "! grep -hE '(^|,)\"?[=+@-][A-Za-z(<]' '$BLC'"
 chk "baseline CSV keeps the hostile pgaudit.log value as text" grep -q 'onerror' "$BLC"
+# engine families: legacy postgres| = both, aurora-postgresql| / rds-postgres| = one each (rule values derived from the data, not hardcoded)
+fam_rows() { jq -c '[.parameters.rows[] | select(.bl.results | length > 0) | .section] | unique' "$OUT/$1.json"; }
+P1="$(jq -r '[.parameters.rows[] | select(.section == "rds-postgres") | .bl.results[].param] | first' "$OUT/bl.json")"
+for fam in postgres aurora-postgresql rds-postgres; do printf '%s | %s | set | | low\n' "$fam" "$P1" >"$OUT/fam_$fam.bl"; t "fam_$fam" 0 fleet "${FLEET[@]}" --with-parameters --baseline "$OUT/fam_$fam.bl"; done
+chk "legacy postgres| applies to Aurora PostgreSQL and RDS PostgreSQL" test "$(fam_rows fam_postgres)" = '["aurora-postgresql","rds-postgres"]'
+jqt fam_postgres '.baseline.legacy_postgres'
+chk "aurora-postgresql| applies to Aurora PostgreSQL only" test "$(fam_rows fam_aurora-postgresql)" = '["aurora-postgresql"]'
+jqt fam_aurora-postgresql '(.baseline.legacy_postgres | not) and ([.parameters.rows[] | select(.bl.results | length > 0) | .type] | unique == ["cluster"])'
+chk "rds-postgres| applies to RDS PostgreSQL only" test "$(fam_rows fam_rds-postgres)" = '["rds-postgres"]'
+# contains: case-insensitive subset, extra items allowed (take one item of a real multi-item value, upper-case it)
+read -r CR CK CV < <(jq -r '[.parameters.rows[] | select(.section == "rds-postgres") as $r | $r.values | to_entries[] | select((.value.v // "") | test(",")) | [$r.name, .key, (.value.v | split(",")[0] | ascii_upcase | gsub("^ +| +$"; ""))]] | first | @tsv' "$OUT/bl.json")
+printf 'rds-postgres | %s | contains | %s | low\n' "$CK" "$CV" >"$OUT/contains.bl"
+t contains 0 fleet "${FLEET[@]}" --with-parameters --baseline "$OUT/contains.bl"
+chk "contains passes with extra items ($CR $CK ⊇ $CV)" test "$(jq -c --arg n "$CR" --arg p "$CK" '[.parameters.rows[] | select(.name == $n) | .bl.results[] | select(.param == $p) | .status]' "$OUT/contains.json")" = '["pass"]'
+# no expected values hardcoded outside the baseline file
+chk "no hardcoded expected values in lib/*.jq, lib/*.html, tests/*.js" bash -c "! grep -nE 'pgaudit|pg_tle|force_ssl|tls10|ssl_min_protocol|md5|scram|SSL not forced|TLS 1.0 enabled' '$HERE'/../lib/*.jq '$HERE'/../lib/*.html '$HERE'/*.js"
 t blskip 0 fleet "${FLEET[@]}" --with-parameters --skip-checks baseline
 jqt blskip '[.insights.findings[] | select(.check | startswith("baseline:"))] == [] and .baseline.applied'
 t blskip1 0 fleet "${FLEET[@]}" --with-parameters --skip-checks baseline:log_connections

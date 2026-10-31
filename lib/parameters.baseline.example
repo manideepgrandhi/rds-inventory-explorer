@@ -1,4 +1,4 @@
-# PostgreSQL (Aurora + RDS) rules below ship commented out: remove the leading "# " on the ones you want.
+# PostgreSQL rules below ship commented out: remove the leading "# " on the ones you want, in the Aurora block, the RDS block, or both.
 # parameters.baseline.example - your standard parameter values, checked by rds_inventory_explorer.sh --with-parameters.
 # Copy it OUTSIDE the release folder (a new release replaces this folder) and point at your copy:
 #   cp lib/parameters.baseline.example ~/parameters.baseline
@@ -6,38 +6,64 @@
 # Without --baseline this bundled example is used; --baseline none turns the checks off.
 #
 # One rule per line:  engine-family | parameter | rule | value | severity      (# starts a comment; blank lines ignored)
-#   engine-family : postgres (RDS + Aurora PostgreSQL), mysql (RDS MySQL / MariaDB + Aurora MySQL), sqlserver, oracle,
-#                   or aurora-postgresql / aurora-mysql for Aurora only
+#   engine-family : aurora-postgresql (Aurora PostgreSQL), rds-postgres (RDS PostgreSQL),
+#                   mysql (RDS MySQL / MariaDB + Aurora MySQL), aurora-mysql (Aurora MySQL only), sqlserver, oracle;
+#                   postgres (before 2.4.0) still works and means both Aurora and RDS PostgreSQL
 #   rule          : =  !=  in  contains  !contains  >  >=  <  <=  between  set
 #                   in / contains / !contains take a comma list; between takes MIN-MAX; set takes no value (any non-empty value)
 #   severity      : high | medium | low
+# Aurora PostgreSQL: checked once per cluster against the cluster parameter group (else the AWS cluster default);
+#   instance-level parameters show "instance-level, not checked"; a member whose instance group sets a baseline
+#   parameter to another value is shown as "overridden on N instance(s)" (a note, not a failure).
 # Values: 1/on/true/yes and 0/off/false/no are the same; numbers are compared as numbers; {DBInstanceClassMemory...}
 # formulas are estimated from the instance class (marked approx). A parameter the engine version does not have is "n/a".
 # log_connections: PostgreSQL 18+ takes a list (receipt,authentication,authorization,setup_durations / all); "= 1" passes
 # when it is on / all or lists receipt, authentication and authorization.
 # Every parameter named here is collected by --with-parameters even when lib/parameters.list does not list it.
 
-## PostgreSQL (Aurora + RDS)
-# postgres | rds.force_ssl                        | =        | 1                                    | high
-# postgres | ssl_min_protocol_version             | in       | TLSv1.2,TLSv1.3                      | high
-# postgres | password_encryption                  | =        | scram-sha-256                        | high
-# postgres | shared_preload_libraries             | contains | pg_stat_statements,pgaudit,pg_tle    | high
-# postgres | pgaudit.log                          | set      |                                      | medium
-# postgres | log_connections                      | =        | 1                                    | medium
-# postgres | log_disconnections                   | =        | 1                                    | medium
-# postgres | log_lock_waits                       | =        | 1                                    | medium
-# postgres | log_min_duration_statement           | between  | 1000-5000                            | medium
-# postgres | log_autovacuum_min_duration          | between  | 0-10000                              | low
-# postgres | log_statement                        | in       | ddl,mod                              | low
-# postgres | idle_in_transaction_session_timeout  | between  | 60000-3600000                        | medium
-# postgres | statement_timeout                    | >=       | 0                                    | low
-# postgres | autovacuum                           | =        | 1                                    | high
-# postgres | autovacuum_max_workers               | >=       | 3                                    | low
-# postgres | autovacuum_vacuum_scale_factor       | <=       | 0.1                                  | low
-# postgres | track_io_timing                      | =        | 1                                    | low
-# postgres | track_activity_query_size            | >=       | 4096                                 | low
-# postgres | random_page_cost                     | <=       | 1.5                                  | low
-# postgres | max_replication_slots                | >=       | 10                                   | low
+## Aurora PostgreSQL (checked once per cluster, on the cluster parameter group)
+# aurora-postgresql | rds.force_ssl                        | =        | 1                                    | high
+# aurora-postgresql | ssl_min_protocol_version             | in       | TLSv1.2,TLSv1.3                      | high
+# aurora-postgresql | password_encryption                  | =        | scram-sha-256                        | high
+# aurora-postgresql | shared_preload_libraries             | contains | pg_stat_statements,pgaudit,pg_tle    | high
+# aurora-postgresql | pgaudit.log                          | set      |                                      | medium
+# aurora-postgresql | log_connections                      | =        | 1                                    | medium
+# aurora-postgresql | log_disconnections                   | =        | 1                                    | medium
+# aurora-postgresql | log_lock_waits                       | =        | 1                                    | medium
+# aurora-postgresql | log_min_duration_statement           | between  | 1000-5000                            | medium
+# aurora-postgresql | log_autovacuum_min_duration          | between  | 0-10000                              | low
+# aurora-postgresql | log_statement                        | in       | ddl,mod                              | low
+# aurora-postgresql | idle_in_transaction_session_timeout  | between  | 60000-3600000                        | medium
+# aurora-postgresql | statement_timeout                    | >=       | 0                                    | low
+# aurora-postgresql | autovacuum                           | =        | 1                                    | high
+# aurora-postgresql | autovacuum_max_workers               | >=       | 3                                    | low
+# aurora-postgresql | autovacuum_vacuum_scale_factor       | <=       | 0.1                                  | low
+# aurora-postgresql | track_io_timing                      | =        | 1                                    | low
+# aurora-postgresql | track_activity_query_size            | >=       | 4096                                 | low
+# aurora-postgresql | random_page_cost                     | <=       | 1.5                                  | low
+# aurora-postgresql | max_replication_slots                | >=       | 10                                   | low
+
+## RDS PostgreSQL (each instance, on its DB parameter group)
+# rds-postgres      | rds.force_ssl                        | =        | 1                                    | high
+# rds-postgres      | ssl_min_protocol_version             | in       | TLSv1.2,TLSv1.3                      | high
+# rds-postgres      | password_encryption                  | =        | scram-sha-256                        | high
+# rds-postgres      | shared_preload_libraries             | contains | pg_stat_statements,pgaudit,pg_tle    | high
+# rds-postgres      | pgaudit.log                          | set      |                                      | medium
+# rds-postgres      | log_connections                      | =        | 1                                    | medium
+# rds-postgres      | log_disconnections                   | =        | 1                                    | medium
+# rds-postgres      | log_lock_waits                       | =        | 1                                    | medium
+# rds-postgres      | log_min_duration_statement           | between  | 1000-5000                            | medium
+# rds-postgres      | log_autovacuum_min_duration          | between  | 0-10000                              | low
+# rds-postgres      | log_statement                        | in       | ddl,mod                              | low
+# rds-postgres      | idle_in_transaction_session_timeout  | between  | 60000-3600000                        | medium
+# rds-postgres      | statement_timeout                    | >=       | 0                                    | low
+# rds-postgres      | autovacuum                           | =        | 1                                    | high
+# rds-postgres      | autovacuum_max_workers               | >=       | 3                                    | low
+# rds-postgres      | autovacuum_vacuum_scale_factor       | <=       | 0.1                                  | low
+# rds-postgres      | track_io_timing                      | =        | 1                                    | low
+# rds-postgres      | track_activity_query_size            | >=       | 4096                                 | low
+# rds-postgres      | random_page_cost                     | <=       | 1.5                                  | low
+# rds-postgres      | max_replication_slots                | >=       | 10                                   | low
 
 ## SQL Server
 sqlserver | rds.force_ssl                       | =        | 1                                    | high

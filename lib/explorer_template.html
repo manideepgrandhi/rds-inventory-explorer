@@ -144,7 +144,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
 .phead > a{font-weight:650}.pmeta{display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--muted);font-size:12.5px;margin-left:6px}
 .pmsg{padding:14px}.pnotes{font-size:12.5px;margin:0 0 10px}
 code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:4px}
-.flag{font-size:11.5px}.from{font-size:12px}.from-instance{color:var(--i)}.from-cluster{color:var(--c)}.from-default{color:var(--muted)}
+.from{font-size:12px}.from-instance{color:var(--i)}.from-cluster{color:var(--c)}.from-default{color:var(--muted)}
 .ptab td:nth-child(1){white-space:nowrap}
 .bl{display:inline-block;padding:0 7px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
 .bl-pass{background:var(--ok-bg);color:var(--ok)}.bl-fail{background:var(--bad-bg);color:var(--bad)}.bl-missing{background:var(--warn-bg);color:var(--warn)}
@@ -164,12 +164,13 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
 .prow{cursor:pointer;user-select:none}.prow:hover{background:var(--panel2)}.prow .tw{display:inline-block;width:14px;color:var(--muted)}
 .pres.p-bad,.pres.p-warn{background:var(--panel);color:var(--text)}.pres.p-bad{border-left:3px solid var(--bad)}.pres.p-warn{border-left:3px solid var(--warn)}
 .pmembers{margin:0 0 10px 28px}.mtoggle{font-size:12.5px;margin:0 0 8px 28px}
-.pdiff{outline:1px dashed var(--warn)}.cmp{font-size:12px;margin-left:6px}
-.cmpbox{padding:8px 10px;background:var(--panel2);border-radius:6px;margin:4px 0}
-.cmpbox .cv{margin:2px 0}.pcount{margin:0 0 8px;font-size:13px}
+.pcount{margin:0 0 8px;font-size:13px}.ovnote{color:var(--muted);font-size:12px;white-space:nowrap}
+tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{background:var(--panel2);padding:8px 12px}
+.sdetail h4{margin:10px 0 4px;font-size:13px}.sdetail h4:first-child{margin-top:0}.fails .fn{margin-right:2px}tr.hlres td{outline:0;background:color-mix(in srgb,var(--accent) 10%,transparent)}
+#px-servers tr.srow>td:nth-child(3),#px-servers tr.srow>td:nth-child(4),#px-servers .fails{white-space:nowrap}
 .ind{padding-left:22px}
 @media (max-width:760px){.pmembers,.mtoggle{margin-left:12px}#px-q{max-width:none}}
-.ptab code,.cmpbox code{color:inherit}
+.ptab code{color:inherit}
 .linkbtn{border:0;background:none;color:var(--accent);padding:0;cursor:pointer;font:inherit}
 @media (max-width:700px){dl{grid-template-columns:1fr}dt{margin-top:6px}}
 </style>
@@ -231,7 +232,7 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
   <select id="xf-engine" aria-label="Engine"></select>
   <select id="xf-level" aria-label="Level"><option value="">Level: all (effective values)</option><option value="cluster">Level: cluster group</option><option value="instance">Level: instance group</option></select>
   <select id="xf-bparam" aria-label="Baseline parameter"></select>
-  <select id="xf-show" aria-label="Show"><option value="">Show: all parameters</option><option value="problems">Show: problems only</option><option value="changed">Show: changed from default</option></select>
+  <select id="xf-show" aria-label="Show"><option value="">Show: all</option><option value="problems">Show: problems only</option><option value="overridden">Show: overridden at instance</option><option value="changed">Show: changed from default</option></select>
   <button type="button" id="xclear">Clear</button>
   <button type="button" id="px-csv" class="export" title="Download what is on screen (view, filters, level, search) as CSV">Export CSV</button>
   <button type="button" id="px-bcsv" class="export2" title="Download the baseline results shown as CSV - same columns as the script's _baseline.csv">Baseline CSV</button>
@@ -296,7 +297,7 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
   function mkHash(o) {
     var parts = [];
     if (o.tab === 'pending' || o.tab === 'insights' || o.tab === 'parameters') parts.push('tab=' + o.tab);
-    ['id', 'res', 'f', 'fv', 'pv', 'grp', 'pq', 'pa', 'pr', 'pe', 'lv', 'bp', 'sh', 'cmp'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
+    ['id', 'res', 'f', 'fv', 'pv', 'grp', 'pq', 'pa', 'pr', 'pe', 'lv', 'bp', 'sh'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
     return parts.length ? '#' + parts.join('&') : '';
   }
   function go(o) {
@@ -806,8 +807,9 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
   })();
 
   /* ---------- Parameters tab (--with-parameters): By resource / By parameter group ---------- */
-  // Hash state: pv=group, grp=<gid>, res=<arn>, pq=<search>, pa/pr/pe=<account/region/engine>, lv=cluster|instance,
-  // sh=problems|changed, bp=<family|param> (fleet table for one baseline parameter), cmp=<param> (compare panel)
+  // Hash state: pv=group, grp=<gid>, res=<arn>, pq=<search>, pa/pr/pe=<account/region/engine section>, lv=cluster|instance (By group only),
+  // sh=problems|overridden|changed, bp=<family|param> (fleet table for one baseline parameter)
+  // Expected values come only from the baseline file (DATA.baseline); nothing here knows a parameter's "right" value.
   var PA = DATA.parameters || { collected: false, rows: [], groups: [], drift: [], csv: [], notes: [], not_collected: [] };
   var PROWS = PA.rows || [], PGRP = PA.groups || [];
   var GBY = {}; PGRP.forEach(function (g) { GBY[g.gid] = g; });
@@ -820,27 +822,37 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
   var BCSV = [], bOff = 0;   // the script's baseline CSV rows for each resource row, same order
   PROWS.forEach(function (r) { var n = r.bl ? r.bl.results.length : 0; BCSV.push((BL.csv || []).slice(bOff, bOff + n)); bOff += n; });
   if (!BLON) { XF.bparam.hidden = true; $('px-bcsv').hidden = true; }
-  var BLSEV = { high: 'High', medium: 'Medium', low: 'Low' };
-  function famOf(sec) { return !sec ? null : /postgres/.test(sec) ? 'postgres' : /mysql/.test(sec) ? 'mysql' : sec; }
+  var BLSEV = { high: 'High', medium: 'Medium', low: 'Low' }, SEVO = { high: 0, medium: 1, low: 2 };
+  var SECN = { 'aurora-postgresql': 'Aurora PostgreSQL', 'rds-postgres': 'RDS PostgreSQL', 'aurora-mysql': 'Aurora MySQL', mysql: 'MySQL / MariaDB', sqlserver: 'SQL Server', oracle: 'Oracle' };
+  var FAMN = { postgres: 'PostgreSQL - legacy postgres| (Aurora + RDS)', 'aurora-postgresql': 'Aurora PostgreSQL', 'rds-postgres': 'RDS PostgreSQL', mysql: 'MySQL (RDS + Aurora)', 'aurora-mysql': 'Aurora MySQL', sqlserver: 'SQL Server', oracle: 'Oracle' };
+  function secName(x) { return SECN[x] || x || 'not listed'; }
+  function famMatch(f, sec) {   // same rule as lib/baseline.jq fam_match
+    if (!sec) return false;
+    if (f === 'postgres') return sec === 'rds-postgres' || sec === 'aurora-postgresql';
+    if (f === 'mysql') return sec === 'mysql' || sec === 'aurora-mysql';
+    return f === sec;
+  }
+  function isApgMember(r) { return r.section === 'aurora-postgresql' && r.type === 'member' && !!r.cluster_id && !!PROW[r.cluster_id]; }
   function isDev(x) { return x.status === 'fail' || x.status === 'missing'; }
   function blOf(r, k) { return r && r.bl ? r.bl.results.filter(function (b) { return b.param === k; })[0] || null : null; }
-  /* one parameter of one resource -> plain status: bad (fails baseline / security flag), warn (couldn't check), na (doesn't apply), ok, none (no rule) */
+  /* one parameter of one resource -> plain status: bad (fails baseline), warn (couldn't check), na (doesn't apply / instance-level), ok, none (no rule) */
   function pStatus(r, k) {
-    var p = r.values[k], b = BLON ? blOf(r, k) : null, flag = p && p.flag;
-    if ((b && isDev(b)) || flag) return { c: 'bad', t: b && b.status === 'missing' ? 'Not set - fails baseline' : b && b.status === 'fail' ? 'Fails baseline' + (flag ? ' · ' + flag : '') : flag, b: b };
+    var b = BLON ? blOf(r, k) : null;
+    if (b && isDev(b)) return { c: 'bad', t: b.status === 'missing' ? 'Not set - fails baseline' : 'Fails baseline', b: b };
     if (b && b.status === 'unknown') return { c: 'warn', t: "Couldn't check", b: b };
+    if (b && b.status === 'instance-level') return { c: 'na', t: 'Instance-level, not checked', b: b };
     if (b && b.status === 'n/a') return { c: 'na', t: "Doesn't apply", b: b };
     if (b && b.status === 'pass') return { c: 'ok', t: 'OK', b: b };
     return { c: 'none', t: 'OK', b: null };
   }
   function stPill(s) { return h('span', { cls: 'st st-' + (s.c === 'none' ? 'ok' : s.c), title: s.b ? (s.b.why ? s.b.why + ' · ' : '') + 'baseline line ' + s.b.line + ': ' + s.b.expected + ' (' + s.b.sev + ')' : null, text: s.t }); }
-  function pending(r) { return [r.apply_status, r.cluster_apply_status].some(function (s) { return s && s !== 'in-sync'; }); }
-  function allKeys(r) {   // listed parameters + baseline-only rules (missing / doesn't apply)
-    var ks = Object.keys(r.values);
-    if (BLON && r.bl) r.bl.results.forEach(function (b) { if (ks.indexOf(b.param) < 0) ks.push(b.param); });
-    return ks;
+  function ovNote(b) {   // grey note: the cluster value is checked, some instance groups set another value
+    if (!b || !b.overrides || !b.overrides.length) return null;
+    var n = b.overrides.length;
+    return h('span', { cls: 'ovnote', title: b.overrides.map(function (o) { return o.instance + ' = ' + o.value; }).join('\n'), text: ' overridden on ' + n + ' instance' + (n === 1 ? '' : 's') });
   }
-  function problemKeys(r) { return allKeys(r).filter(function (k) { return pStatus(r, k).c === 'bad'; }); }
+  function pending(r) { return [r.apply_status, r.cluster_apply_status].some(function (s) { return s && s !== 'in-sync'; }); }
+  function problemKeys(r) { return BLON && r.bl ? r.bl.results.filter(isDev).map(function (b) { return b.param; }) : []; }
   function gidOf(r, kind, name) { return name ? r.account + '|' + r.region + '|' + kind + '|' + name : null; }
   function gidHash(gid) { return mkHash({ tab: 'parameters', pv: 'group', grp: gid }); }
   function grpLink(gid, fallback) {
@@ -861,15 +873,16 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
     return h('span', null, v0 == null ? h('span', { cls: 'muted', text: 'not set' }) : h('code', { cls: p && p.nondef ? 'nd' : null, title: p && p.nondef ? 'changed from default' : null, text: v0 }),
       ax != null ? h('span', { cls: 'muted', title: 'approximate: DBInstanceClassMemory estimated from the instance class', text: ' ≈ ' + Number(ax).toLocaleString('en-US') }) : null);
   }
-  // card: Baseline section (kept), links into the Parameters tab
+  function stRowCls(r, b) { var c = pStatus(r, b.param).c; return 'bl-row-' + (b.status === 'n/a' ? 'na' : b.status) + (c === 'none' || c === 'ok' ? '' : ' r-' + c); }
+  // card: Baseline section with full detail (Comes from), links into the Parameters tab
   function blTable(r) {
     var rs = r.bl ? r.bl.results : [];
     if (!rs.length) return h('div', { cls: 'empty pmsg', text: 'No baseline rule for this engine.' });
     var t = table(['Parameter', 'Actual', 'Expected', 'Status', 'Severity', 'Comes from'], rs.map(function (x) {
-      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), stPill(pStatus(r, x.param)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] }),
+      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), h('span', null, stPill(pStatus(r, x.param)), ovNote(x)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] }),
         x.from ? fromCell(r, { from: x.from, group: x.group, src: (r.values[x.param] || {}).src }) : dash()];
     }), 'stack ptab bltab');
-    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { var c = pStatus(r, rs[i].param).c; tr.className = 'bl-row-' + (rs[i].status === 'n/a' ? 'na' : rs[i].status) + (c === 'none' || c === 'ok' ? '' : ' r-' + c); });
+    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { tr.className = stRowCls(r, rs[i]); });
     return t;
   }
   function badgeFor(r) {
@@ -881,151 +894,165 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
     if (!BLON) return null;
     var r = PROW[res.id];
     if (!r) return sec('Baseline', h('span', { cls: 'muted', text: 'No parameter data for this resource.' }), true);
+    if (isApgMember(r)) { var c = PROW[r.cluster_id]; return sec('Baseline', h('div', { id: 'card-bl', cls: 'apgm' }, h('span', { cls: 'muted', text: 'Aurora PostgreSQL is checked once per cluster, on the cluster parameter group: ' }), link(c.res_id, c.name)), true); }
     return sec('Baseline', h('div', { id: 'card-bl' }, h('div', { cls: 'bdg' }, badgeFor(r), ' ',
       h('a', { href: mkHash({ tab: 'parameters', res: r.res_id }), text: 'open in the Parameters tab' })), blTable(r)), true);
   }
   opts(XF.account, 'accounts', uniq(PROWS.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
   opts(XF.region, 'regions', uniq(PROWS.map(function (r) { return r.region; })).map(function (x) { return [x, x]; }));
-  opts(XF.engine, 'engines', uniq(PROWS.map(function (r) { return r.engine; })).map(function (x) { return [x, x]; }));
-  (function () {   // Baseline parameter: rules grouped by engine family
+  opts(XF.engine, 'engines', uniq(PROWS.map(function (r) { return r.section; })).map(function (x) { return [x, secName(x)]; }));
+  function fillBparam(engine) {   // Baseline parameter: the rules of the baseline file, only those for the chosen engine
+    var cur = XF.bparam.value; XF.bparam.textContent = '';
     XF.bparam.appendChild(h('option', { value: '', text: 'Baseline parameter: any' }));
-    var by = {}; (BL.rule_list || []).forEach(function (x) { (by[x.family] = by[x.family] || []).indexOf(x.param) < 0 && by[x.family].push(x.param); });
-    var FN = { postgres: 'PostgreSQL (Aurora + RDS)', mysql: 'MySQL / Aurora MySQL', sqlserver: 'SQL Server', oracle: 'Oracle' };
-    Object.keys(by).forEach(function (f) {
-      XF.bparam.appendChild(h('optgroup', { label: FN[f] || f }, by[f].map(function (p) { return h('option', { value: f + '|' + p, text: p }); })));
+    var by = {}, fams = [];
+    (BL.rule_list || []).forEach(function (x) {
+      if (engine && !famMatch(x.family, engine)) return;
+      if (!by[x.family]) { by[x.family] = []; fams.push(x.family); }
+      if (by[x.family].indexOf(x.param) < 0) by[x.family].push(x.param);
     });
-  })();
+    fams.forEach(function (f) { XF.bparam.appendChild(h('optgroup', { label: FAMN[f] || f }, by[f].map(function (p) { return h('option', { value: f + '|' + p, text: p }); }))); });
+    XF.bparam.value = cur;
+  }
+  fillBparam('');
   function pv() { return hp().pv === 'group' ? 'group' : 'resource'; }
-  function pState() { var o = hp(), s = { q: (o.pq || '').trim().toLowerCase(), cmp: o.cmp || '' }; Object.keys(XKEY).forEach(function (k) { s[k] = o[XKEY[k]] || ''; }); return s; }
+  function pState() { var o = hp(), s = { q: (o.pq || '').trim().toLowerCase() }; Object.keys(XKEY).forEach(function (k) { s[k] = o[XKEY[k]] || ''; }); return s; }
   function pHash(over) {   // current tab state + changes
-    var o = hp(), x = { tab: 'parameters', pv: o.pv === 'group' ? 'group' : '', grp: o.grp, res: o.res, pq: XQ.value, cmp: o.cmp };
+    var o = hp(), x = { tab: 'parameters', pv: o.pv === 'group' ? 'group' : '', grp: o.grp, res: o.res, pq: XQ.value };
     Object.keys(XKEY).forEach(function (k) { x[XKEY[k]] = XF[k].value; });
     for (var k in over) if (Object.prototype.hasOwnProperty.call(over, k)) x[k] = over[k];
     return x;
   }
   function pSet(over, replace) { var hs = mkHash(pHash(over)); if (replace) { history.replaceState(null, '', hs || location.pathname); render(); } else go(pHash(over)); }
   function scopeOk(x, s) { return (!s.account || x.account === s.account) && (!s.region || x.region === s.region); }
-  function rowIn(r, s) { return scopeOk(r, s) && (!s.engine || r.engine === s.engine); }
-  function levelRow(r, s) { return !s.level ? true : s.level === 'cluster' ? r.type === 'cluster' : r.type !== 'cluster'; }
-  function levelKey(r, k, s) {   // Instance group level: only what the instance parameter group holds (or its default)
-    if (s.level !== 'instance' || r.type === 'instance' || !r.cluster_id) return true;
-    var p = r.values[k], b = blOf(r, k);
-    return p ? p.group === r.instance_group : b ? b.from !== 'cluster' : true;
-  }
-  function hayRow(r) { return [r.name, r.cluster_name, r.cluster_group && r.cluster_group.split('|').pop(), r.instance_group && r.instance_group.split('|').pop()].join(' ').toLowerCase(); }
-  function hayKey(r, k) { var p = r.values[k], b = blOf(r, k); return (k + ' ' + (p && p.v != null ? p.v : b && b.actual != null ? b.actual : '')).toLowerCase(); }
-  function showKey(r, k, s) {
-    if (s.show === 'problems') return pStatus(r, k).c === 'bad';
-    if (s.show === 'changed') return !!(r.values[k] && r.values[k].nondef);
+  /* By resource: one row per server = a cluster (with its members) or a standalone instance */
+  var SERVERS = (function () {
+    var out = [], byC = {};
+    PROWS.forEach(function (r) { if (r.type === 'cluster') { byC[r.res_id] = { r: r, mem: [] }; out.push(byC[r.res_id]); } });
+    PROWS.forEach(function (r) { if (r.type === 'cluster') return; if (r.cluster_id && byC[r.cluster_id]) byC[r.cluster_id].mem.push(r); else out.push({ r: r, mem: [] }); });
+    out.forEach(function (s, i) {
+      s.i = i; s.rows = [s.r].concat(s.mem);
+      s.f = { high: 0, medium: 0, low: 0 }; s.nres = 0;
+      s.rows.forEach(function (x) { if (x.bl) { s.f.high += x.bl.high || 0; s.f.medium += x.bl.medium || 0; s.f.low += x.bl.low || 0; s.nres += x.bl.results.length; } });
+      s.fails = BLON ? s.f.high + s.f.medium + s.f.low : 0;
+      s.ov = BLON && s.r.bl ? s.r.bl.overridden || 0 : 0;
+      s.changed = s.rows.some(function (x) { return Object.keys(x.values).some(function (k) { return x.values[k].nondef; }); });
+      s.pend = s.rows.some(pending);
+      s.hay = [].concat.apply([], s.rows.map(function (x) {
+        return [x.name, x.engine, x.cluster_group && x.cluster_group.split('|').pop(), x.instance_group && x.instance_group.split('|').pop()]
+          .concat(Object.keys(x.values).map(function (k) { return k + ' ' + (x.values[k].v == null ? '' : x.values[k].v); }));
+      })).join(' ').toLowerCase();
+    });
+    return out;
+  })();
+  var SBY = {}; SERVERS.forEach(function (s) { s.rows.forEach(function (x) { SBY[x.res_id] = s; }); });
+  function srvIn(v, s, noShow) {
+    if (!scopeOk(v.r, s) || (s.engine && v.r.section !== s.engine)) return false;
+    if (s.q && v.hay.indexOf(s.q) < 0) return false;
+    if (noShow) return true;
+    if (s.show === 'problems') return v.fails > 0;
+    if (s.show === 'overridden') return v.ov > 0;
+    if (s.show === 'changed') return v.changed;
     return true;
   }
-  function keysFor(r, s) {   // visible parameter names of a resource row, or null when the row is hidden
-    if (!rowIn(r, s) || !levelRow(r, s)) return null;
-    var rowHit = !s.q || hayRow(r).indexOf(s.q) >= 0;
-    var ks = allKeys(r).filter(function (k) { return levelKey(r, k, s) && showKey(r, k, s) && (rowHit || hayKey(r, k).indexOf(s.q) >= 0); });
-    if (!ks.length && (s.show || !rowHit)) return null;
-    return ks;
-  }
-  function siblingsDiffer(r) {   // a member whose instance group differs from the one most members of its cluster use
-    if (r.type !== 'member' || !r.cluster_id) return false;
-    var ms = PROWS.filter(function (m) { return m.cluster_id === r.cluster_id; }), n = {}, best = null;
-    ms.forEach(function (m) { n[m.instance_group] = (n[m.instance_group] || 0) + 1; if (best === null || n[m.instance_group] > n[best]) best = m.instance_group; });
-    return Object.keys(n).length > 1 && r.instance_group !== best;
-  }
-  function units(s) {   // [{c: cluster row | null, cks, mem: [{r, ks}], score}] in display order: problems first
-    var out = [], byC = {};
-    PROWS.forEach(function (r) {
-      if (r.type === 'cluster') { var u = { c: r, cks: keysFor(r, s), mem: [] }; byC[r.res_id] = u; out.push(u); }
-      else if (r.cluster_id && byC[r.cluster_id]) { var ks = keysFor(r, s); if (ks) byC[r.cluster_id].mem.push({ r: r, ks: ks }); }
-      else { var ks2 = keysFor(r, s); if (ks2) out.push({ c: null, cks: null, mem: [{ r: r, ks: ks2 }] }); }
+  function servers(s) {
+    return SERVERS.filter(function (v) { return srvIn(v, s); }).sort(function (a, b) {
+      return b.f.high - a.f.high || b.f.medium - a.f.medium || b.f.low - a.f.low || a.i - b.i;
     });
-    out = out.filter(function (u) { return u.cks || u.mem.length; });
-    out.forEach(function (u, i) {
-      u.mem.forEach(function (m) { m.n = problemKeys(m.r).length; });
-      u.mem.sort(function (a, b) { return b.n - a.n || a.r._i - b.r._i; });
-      u.score = (u.c ? problemKeys(u.c).length : 0) + u.mem.reduce(function (a, m) { return a + m.n; }, 0); u.i = i;
-    });
-    return out.sort(function (a, b) { return (b.score > 0) - (a.score > 0) || b.score - a.score || a.i - b.i; });
   }
-  var OPEN = {}, MCLOSED = {};   // expanded resource rows / collapsed member lists (session only)
-  function cmpPanel(r, k, s) {   // one parameter across same-engine resources (scope filters apply)
-    var vals = {}, order = [];
-    PROWS.forEach(function (x) {
-      if (x.section !== r.section || !scopeOk(x, s) || !x.values[k]) return;
-      var v0 = x.values[k].v == null ? '(empty)' : x.values[k].v;
-      if (!vals[v0]) { vals[v0] = []; order.push(v0); } vals[v0].push(x);
-    });
-    return h('div', { cls: 'cmpbox', 'data-cmp': k }, h('div', { cls: 'muted', text: k + ' on ' + r.section + ' resources' + (order.length > 1 ? ': ' + order.length + ' different values' : ': same value everywhere') }),
-      order.map(function (v0) {
-        return h('div', { cls: 'cv' }, h('code', { text: v0 }), ' - ', vals[v0].map(function (x, j) { return [j ? ', ' : '', h('a', { href: mkHash(pHash({ res: x.res_id, cmp: k })), text: x.name, cls: x === r ? 'self' : null })]; }));
-      }));
+  var OPEN = {}, ALLP = {};   // expanded server rows / "show all collected parameters" (session only)
+  function sortRules(r) {
+    var rs = (r.bl ? r.bl.results : []).slice();
+    return rs.sort(function (a, b) { return STORD[pStatus(r, a.param).c] - STORD[pStatus(r, b.param).c] || SEVO[a.sev] - SEVO[b.sev] || rs.indexOf(a) - rs.indexOf(b); });
   }
-  function detailTable(r, ks, s) {
-    if (r.group_error) return h('div', { cls: 'empty pmsg', text: 'Parameter group could not be read: ' + r.group_error });
-    if (!ks.length) return h('div', { cls: 'empty pmsg', text: r.section ? 'No listed parameter for this resource at this level.' : 'This engine is not in lib/parameters.list.' });
-    var rows = [], cls = [];
-    ks.forEach(function (k) {
-      var p = r.values[k], st = pStatus(r, k), b = st.b || (BLON ? blOf(r, k) : null);
-      rows.push([h('span', null, h('code', { text: k }), p ? h('a', { cls: 'cmp', href: mkHash(pHash({ res: r.res_id, cmp: s.cmp === k ? '' : k })), 'data-cmpk': k, title: 'Compare across clusters', text: 'compare' }) : null),
-        actualCell(p, b), b ? h('span', { text: b.expected }) : h('span', { cls: 'muted', text: 'no rule' }), stPill(st), p ? fromCell(r, p) : b && b.from ? fromCell(r, { from: b.from, group: b.group }) : dash()]);
-      cls.push(st.c === 'bad' || st.c === 'warn' || st.c === 'na' ? 'r-' + st.c : '');
-    });
-    var t = table(['Parameter', 'Actual', 'Expected', 'Status', 'Comes from'], rows, 'stack ptab');
-    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) {
-      tr.className = cls[i]; tr.setAttribute('data-k', ks[i]);
-      if (s.cmp === ks[i] && hp().res === r.res_id) { var c = h('tr', { cls: 'cmprow' }, h('td', { colspan: '5' }, cmpPanel(r, ks[i], s))); tr.parentNode.insertBefore(c, tr.nextSibling); }
+  function ruleTable(r) {
+    var rs = sortRules(r);
+    if (!rs.length) return h('div', { cls: 'empty pmsg', text: r.section ? 'No baseline rule for this engine.' : 'This engine is not in lib/parameters.list.' });
+    var t = table(['Parameter', 'Actual', 'Expected', 'Status', 'Severity'], rs.map(function (x) {
+      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), h('span', null, stPill(pStatus(r, x.param)), ovNote(x)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] })];
+    }), 'stack ptab rtab');
+    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { tr.className = stRowCls(r, rs[i]); tr.setAttribute('data-k', rs[i].param); });
+    return t;
+  }
+  function valuesTable(r) {
+    var ks = Object.keys(r.values);
+    if (!ks.length) return h('div', { cls: 'empty pmsg', text: 'No listed parameter collected.' });
+    return table(['Parameter', 'Value', 'Comes from'], ks.map(function (k) { return [h('code', { text: k }), actualCell(r.values[k], null), fromCell(r, r.values[k])]; }), 'stack ptab vtab');
+  }
+  function srvDetail(v) {
+    var r = v.r, out = [];
+    if (r.group_error) out.push(h('div', { cls: 'empty pmsg', text: 'Parameter group could not be read: ' + r.group_error }));
+    if (BLON) {
+      out.push(h('h4', { text: 'Baseline rules' + (r.type === 'cluster' ? ' (cluster parameter group)' : '') }), ruleTable(r));
+      if (r.section === 'aurora-postgresql' && v.mem.length) out.push(h('div', { cls: 'muted pmsg', text: 'Members (' + v.mem.map(function (m) { return m.name; }).join(', ') + ') are not checked: Aurora PostgreSQL is checked once per cluster, on the cluster parameter group.' }));
+      else v.mem.forEach(function (m) { if (m.bl && m.bl.results.length) out.push(h('h4', null, 'Member ', link(m.res_id, m.name), ' (instance parameter group)'), ruleTable(m)); });
+      var ovs = r.bl && r.bl.overrides || [];
+      if (ovs.length) out.push(h('h4', { text: 'Overridden at instance level (note, not a failure)' }),
+        (function () { var t = table(['Parameter', 'Instance', 'Instance value', 'Cluster value'], ovs.map(function (o) { return [h('code', { text: o.param }), link(o.res_id, o.instance), h('code', { text: o.value == null ? '' : o.value }), h('code', { text: o.cluster_value == null ? '' : o.cluster_value })]; }), 'stack ptab otab'); t.querySelector('table').id = 'ov-' + v.i; return t; })());
+    }
+    var all = !!ALLP[r.res_id];
+    out.push(h('div', { cls: 'mtoggle' }, h('button', { type: 'button', cls: 'linkbtn allp', 'aria-expanded': String(all), onclick: function () { ALLP[r.res_id] = !all; render(); } }, (all ? '▾ Hide' : '▸ Show') + ' all collected parameters')));
+    if (all) v.rows.forEach(function (x) { out.push(h('h4', null, badge(x.type), ' ', x.name), valuesTable(x)); });
+    return h('div', { cls: 'sdetail' }, out);
+  }
+  function srvTable(list, o) {
+    var t = table(['Server', 'Engine / version', 'Account', 'Region', 'Parameter group', 'Fails (H/M/L)', 'Overrides', 'Status'], list.map(function (v) {
+      var r = v.r, res = BY[r.res_id], open = !!OPEN[r.res_id];
+      var g = r.type === 'cluster' ? r.cluster_group : r.instance_group;
+      return [h('span', null, h('span', { cls: 'tw', text: open ? '▾' : '▸' }), badge(r.type), ' ', link(r.res_id, r.name), v.mem.length ? h('span', { cls: 'muted', text: ' · ' + v.mem.length + ' member(s)' }) : null),
+        h('span', null, secName(r.section), h('span', { cls: 'muted', text: res && res.version ? ' ' + res.version : '' })),
+        h('code', { text: r.account }), r.region, grpLink(g, g && g.split('|').pop()),
+        !BLON || !v.nres ? dash() : h('span', { cls: 'fails', 'data-fails': v.f.high + ',' + v.f.medium + ',' + v.f.low }, [['high', 'H'], ['medium', 'M'], ['low', 'L']].map(function (x, i) {
+          return [i ? ' ' : '', h('span', { cls: v.f[x[0]] ? 'fn sev sev-' + BLSEV[x[0]] : 'fn muted', text: v.f[x[0]] + ' ' + x[1] })];
+        })),
+        v.ov ? h('span', { cls: 'ovnote', text: 'on ' + v.ov + ' instance' + (v.ov === 1 ? '' : 's') }) : dash(),
+        h('span', null, !BLON || !v.nres ? h('span', { cls: 'muted', text: BLON ? 'no rule' : '—' }) : v.fails ? pill(v.fails + ' fail', 'bad') : pill('OK', 'ok'),
+          v.pend ? [' ', h('span', { cls: 'pill p-warn', title: 'a parameter change is waiting for a reboot', text: 'pending reboot' })] : null)];
+    }), 'stack ptab srv');
+    var tb = t.querySelector('tbody'); t.querySelector('table').id = 'px-servers';
+    Array.prototype.slice.call(tb.children).forEach(function (tr, i) {
+      var v = list[i], id = v.r.res_id, open = !!OPEN[id];
+      tr.className = 'prow srow' + (v.fails ? ' s-fail' : '') + (o.res && SBY[o.res] === v ? ' hlres' : '');
+      tr.setAttribute('data-res', id); tr.setAttribute('tabindex', '0'); tr.setAttribute('aria-expanded', String(open));
+      tr.addEventListener('click', function (e) { if (e.target.closest('a')) return; OPEN[id] = !open; if (!OPEN[id] && o.res && SBY[o.res] === v) pSet({ res: '' }, true); else render(); });
+      tr.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } });
+      if (open) tb.insertBefore(h('tr', { cls: 'sdrow', 'data-for': id }, h('td', { colspan: '8' }, srvDetail(v))), tr.nextSibling);
     });
     return t;
   }
-  function resPanel(r, ks, s, isMember) {
-    var open = !!OPEN[r.res_id] || hp().res === r.res_id, n = problemKeys(r).length, pend = pending(r), diff = s.level === 'instance' && siblingsDiffer(r);
-    var meta = [h('span', null, h('code', { text: r.account }), ' ' + r.region), h('span', { text: r.engine + (BY[r.res_id] && BY[r.res_id].version ? ' ' + BY[r.res_id].version : '') + (r.class ? ' · ' + r.class : '') }),
-      r.global ? h('span', { text: 'global ' + r.global }) : null,
-      r.cluster_group && s.level !== 'instance' ? h('span', null, 'cluster group ', grpLink(r.cluster_group)) : null,
-      r.instance_group && s.level !== 'cluster' ? h('span', null, 'instance group ', grpLink(r.instance_group), diff ? ' ' : null, diff ? pill('differs from other members', 'warn') : null) : null];
-    var head = h('div', { cls: 'phead prow', role: 'button', tabindex: '0', 'aria-expanded': String(open), onclick: function (e) { if (e.target.closest('a')) return; OPEN[r.res_id] = !open; if (!OPEN[r.res_id] && hp().res === r.res_id) pSet({ res: '', cmp: '' }, true); else render(); },
-      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.click(); } } },
-      h('span', { cls: 'tw', text: open ? '▾' : '▸' }), badge(r.type), ' ', link(r.res_id, r.name), ' ', badgeFor(r), pend ? [' ', h('span', { cls: 'pill p-warn', title: 'a parameter change is waiting for a reboot', text: 'pending reboot' })] : null,
-      h('span', { cls: 'muted', text: ' ' + ks.length + ' parameter(s)' }), h('span', { cls: 'pmeta' }, meta));
-    return h('div', { cls: 'panel pres' + (isMember ? ' pmem' : '') + (n ? ' p-bad' : pend ? ' p-warn' : '') + (diff ? ' pdiff' : ''), 'data-res': r.res_id, 'data-open': String(open) }, head, open ? detailTable(r, ks, s) : null);
-  }
   function legend() {
-    return h('div', { cls: 'plegend', id: 'px-legend' }, h('span', null, h('i', { cls: 'sw s-bad' }), 'red: fails the baseline or a security rule'),
-      h('span', null, h('i', { cls: 'sw s-warn' }), "yellow: pending reboot or couldn't check"), h('span', null, h('i', { cls: 'sw s-na' }), "grey: doesn't apply"),
-      h('span', null, h('i', { cls: 'sw' }), 'no colour: OK'), h('span', null, h('code', { cls: 'nd', text: 'value' }), ' changed from default'));
-  }
-  function blSummary() {
-    if (!BLON) return null;
-    return h('div', { cls: 'pblsum', id: 'bl-summary' }, h('span', { text: 'Baseline ' + BL.file + ' (' + BL.rules + ' rules):' }), (BL.accounts || []).map(function (a) {
-      return h('span', { 'data-acc': a.account, text: a.account + (profOf[a.account] ? ' (' + profOf[a.account].join(', ') + ')' : '') + ': ' + a.off + ' of ' + a.resources + ' off baseline · ' + a.high + ' high, ' + a.medium + ' medium, ' + a.low + ' low' });
-    }));
+    return h('div', { cls: 'plegend', id: 'px-legend' }, h('span', null, h('i', { cls: 'sw s-bad' }), 'fails the baseline'),
+      h('span', null, h('i', { cls: 'sw s-warn' }), "pending reboot / couldn't check"), h('span', null, h('i', { cls: 'sw s-na' }), "doesn't apply / instance-level, not checked"),
+      h('span', { title: 'An instance parameter group sets a different value than the cluster group. The cluster value is what is checked.' }, h('span', { cls: 'ovnote', text: 'overridden on N' }), ' instance value differs'),
+      h('span', { title: '≈ approximate: DBInstanceClassMemory estimated from the instance class' }, h('code', { cls: 'nd', text: 'value' }), ' changed from default'));
   }
   /* fleet table for one baseline parameter */
   var STORD = { bad: 0, warn: 1, ok: 2, none: 2, na: 3 };
   function bpRows(s) {
     var fp = s.bparam.split('|'), fam = fp[0], k = fp.slice(1).join('|'), out = [];
-    units(Object.assign({}, s, { q: '', show: '' })).forEach(function (u) {
-      var rs = (u.c && u.cks ? [u.c] : []).concat(u.mem.map(function (m) { return m.r; }));
-      var list = rs.filter(function (r) {
-        if (famOf(r.section) !== fam || !blOf(r, k) || !levelKey(r, k, s)) return false;
-        if (s.q && hayRow(r).indexOf(s.q) < 0 && hayKey(r, k).indexOf(s.q) < 0) return false;
-        return showKey(r, k, s);
-      }).map(function (r) { return { r: r, st: pStatus(r, k), b: blOf(r, k), member: !!(u.c && r !== u.c) }; });
-      if (list.length) out.push({ list: list, w: Math.min.apply(null, list.map(function (x) { return STORD[x.st.c]; })), i: out.length });
+    servers(Object.assign({}, s, { show: '' })).forEach(function (v) {
+      v.rows.forEach(function (r) {
+        var b = blOf(r, k);
+        if (!famMatch(fam, r.section) || !b) return;
+        var st = pStatus(r, k);
+        if (s.show === 'problems' && st.c !== 'bad') return;
+        if (s.show === 'overridden' && !(b.overrides && b.overrides.length)) return;
+        if (s.show === 'changed' && !(r.values[k] && r.values[k].nondef)) return;
+        out.push({ r: r, st: st, b: b, member: r !== v.r, i: out.length });
+      });
     });
-    out.sort(function (a, b) { return a.w - b.w || a.i - b.i; });
-    return { k: k, fam: fam, rows: [].concat.apply([], out.map(function (x) { return x.list; })) };
+    out.sort(function (a, b) { return STORD[a.st.c] - STORD[b.st.c] || a.i - b.i; });
+    return { k: k, fam: fam, rows: out };
   }
   function renderBp(view, s) {
     var x = bpRows(s), c = { ok: 0, bad: 0, warn: 0, na: 0 };
     x.rows.forEach(function (y) { c[y.st.c === 'none' ? 'ok' : y.st.c]++; });
-    view.appendChild(h('div', { cls: 'listhead' }, h('h2', null, 'Baseline parameter ', h('code', { text: x.k })), h('span', { cls: 'muted', id: 'px-shown', text: x.fam + ' resources' })));
-    view.appendChild(h('div', { cls: 'pcount', id: 'bp-count', text: x.rows.length + ' resources: ' + c.ok + ' OK, ' + c.bad + ' fail' + (c.warn ? ', ' + c.warn + " couldn't check" : '') + (c.na ? ', ' + c.na + " doesn't apply" : '') }));
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', null, 'Baseline parameter ', h('code', { text: x.k })), h('span', { cls: 'muted', id: 'px-shown', text: (FAMN[x.fam] || x.fam) + ' resources' })));
+    view.appendChild(h('div', { cls: 'pcount', id: 'bp-count', text: x.rows.length + ' resources: ' + c.ok + ' OK, ' + c.bad + ' fail' + (c.warn ? ', ' + c.warn + " couldn't check" : '') + (c.na ? ', ' + c.na + " doesn't apply / not checked" : '') }));
     if (!x.rows.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
     var t = table(['Account', 'Region', 'Resource', 'Engine / version', 'Actual', 'Expected', 'Status', 'Comes from'], x.rows.map(function (y) {
       var r = y.r, res = BY[r.res_id];
       return [h('code', { text: r.account }), r.region, h('span', { cls: y.member ? 'ind' : null }, badge(r.type), ' ', h('a', { href: mkHash(pHash({ bp: '', res: r.res_id })), title: 'Open in By resource', text: r.name })),
-        r.engine + (res && res.version ? ' ' + res.version : ''), actualCell(r.values[x.k], y.b), h('span', { text: y.b.expected }), stPill(y.st),
+        secName(r.section) + (res && res.version ? ' ' + res.version : ''), actualCell(r.values[x.k], y.b), h('span', { text: y.b.expected }), h('span', null, stPill(y.st), ovNote(y.b)),
         r.values[x.k] ? fromCell(r, r.values[x.k]) : y.b.from ? fromCell(r, { from: y.b.from, group: y.b.group }) : dash()];
     }), 'stack ptab');
     t.querySelector('table').id = 'bp-table';
@@ -1039,7 +1066,7 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
   function pGroups(s) {
     return PGRP.filter(function (g) {
       if (!scopeOk(g, s) || (s.level && g.kind !== s.level)) return false;
-      if (s.engine && !g.used_by.some(function (u) { return BY[u.id] && BY[u.id].engine === s.engine; })) return false;
+      if (s.engine && !g.used_by.some(function (u) { return PROW[u.id] && PROW[u.id].section === s.engine; })) return false;
       if (s.show === 'changed' && !g.nondefault) return false;
       if (s.show === 'problems' && !groupProblems(g)) return false;
       if (s.q && [g.name, g.family].concat(g.used_by.map(function (u) { return u.name; }), Object.keys(g.values)).join(' ').toLowerCase().indexOf(s.q) < 0) return false;
@@ -1073,44 +1100,41 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
     var view = $('view'); view.textContent = '';
     document.title = 'Parameters - RDS Inventory Explorer';
     var mode = pv(), s = pState();
-    Object.keys(XKEY).forEach(function (k) { XF[k].value = s[k]; if (XF[k].value !== s[k]) XF[k].value = ''; });
+    fillBparam(mode === 'group' ? '' : s.engine);
+    Object.keys(XKEY).forEach(function (k) { XF[k].value = s[k]; if (XF[k].value !== s[k]) { XF[k].value = ''; s[k] = ''; } });
     if (document.activeElement !== XQ) XQ.value = o.pq || '';
     ['resource', 'group'].forEach(function (m) { $('pv-' + m).setAttribute('aria-pressed', String(m === mode)); });
-    XF.bparam.disabled = mode === 'group';
+    XF.bparam.disabled = mode === 'group'; XF.level.hidden = mode !== 'group';
     if (!PA.collected) {
       view.appendChild(h('div', { cls: 'panel empty', id: 'px-none', text: 'Parameters were not collected for this report. Re-run with --with-parameters (or with-parameters=true in the config file).' }));
       return;
     }
-    var notes = (PA.not_collected || []).map(function (a) { return 'Parameters not collected for account ' + a + ' (data file without --with-parameters).'; }).concat(PA.notes || []);
-    view.appendChild(h('details', { cls: 'pnotes muted', id: 'px-notes' }, h('summary', { text: 'Notes (' + notes.length + ')' }), notes.map(function (n) { return h('div', { text: n }); })));
-    if (PA.not_collected && PA.not_collected.length) view.lastChild.open = true;
+    (PA.not_collected || []).forEach(function (a) { view.appendChild(h('div', { cls: 'pnotes', id: 'px-notes', text: 'Parameters not collected for account ' + a + ' (data file without --with-parameters).' })); });
     view.appendChild(legend());
     if (mode === 'group') { renderGroups(view, o, s); return; }
-    view.appendChild(blSummary());
     if (s.bparam && BLON) { renderBp(view, s); return; }
-    var us = units(s), nres = us.reduce(function (a, u) { return a + (u.cks ? 1 : 0) + u.mem.length; }, 0);
-    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'By resource' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + nres + ' of ' + PROWS.length + ' resource(s) · problems first · click a row for its parameters' })));
-    if (!us.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
-    us.forEach(function (u) {
-      if (u.c) {
-        if (u.cks) view.appendChild(resPanel(u.c, u.cks, s, false));
-        else view.appendChild(h('div', { cls: 'panel pres pgrp', 'data-res': u.c.res_id, 'data-label': 'cluster' }, h('div', { cls: 'phead' }, badge('cluster'), ' ', link(u.c.res_id, u.c.name), h('span', { cls: 'pmeta' }, h('span', null, h('code', { text: u.c.account }), ' ' + u.c.region)))));
-        if (u.mem.length) {
-          var closed = !!MCLOSED[u.c.res_id] && !u.mem.some(function (m) { return m.r.res_id === o.res; }), np = u.mem.reduce(function (a, m) { return a + m.n; }, 0);
-          view.appendChild(h('div', { cls: 'mtoggle' }, h('button', { type: 'button', cls: 'linkbtn', 'data-mt': u.c.res_id, 'aria-expanded': String(!closed), onclick: function () { MCLOSED[u.c.res_id] = !closed; render(); } },
-            (closed ? '▸ show ' : '▾ hide ') + u.mem.length + ' member(s)' + (np ? ' · ' + np + ' problem(s)' : ''))));
-          if (!closed) view.appendChild(h('div', { cls: 'pmembers', 'data-cluster': u.c.res_id }, u.mem.map(function (m) { return resPanel(m.r, m.ks, s, true); })));
-        }
-      } else view.appendChild(resPanel(u.mem[0].r, u.mem[0].ks, s, false));
-    });
-    if (o.res) { var el = view.querySelector('.pres[data-res="' + (window.CSS && CSS.escape ? CSS.escape(o.res) : o.res) + '"]'); if (el) { el.classList.add('hlres'); el.scrollIntoView({ block: 'nearest' }); } }
+    if (o.res && SBY[o.res]) OPEN[SBY[o.res].r.res_id] = true;
+    var list = servers(s);
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'By resource' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + list.length + ' of ' + SERVERS.length + ' server(s) · failures first · click a row for its baseline rules' })));
+    if (!list.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
+    view.appendChild(h('div', { cls: 'panel scroll' }, srvTable(list, o)));
+    if (o.res) { var el = view.querySelector('tr.hlres'); if (el) el.scrollIntoView({ block: 'nearest' }); }
   }
-  function baselineCsv() {   // same columns / rows as the script's _baseline.csv, for the rows and rules on screen
-    var s = pState();
-    return csvText([CSVCOLS.baseline || []].concat([].concat.apply([], PROWS.map(function (r) {
-      var ks = keysFor(r, s); if (!ks) return [];
+  function visRows(s) {   // rows of the visible servers, in data order (so the unfiltered CSV equals the script's)
+    var on = {}; servers(s).forEach(function (v) { on[v.i] = 1; });
+    return PROWS.filter(function (r) { return SBY[r.res_id] && on[SBY[r.res_id].i]; });
+  }
+  function baselineCsv() {   // same columns / rows as the script's _baseline.csv, for the servers and rules on screen
+    var s = pState(), fp = s.bparam ? s.bparam.split('|') : null;
+    return csvText([CSVCOLS.baseline || []].concat([].concat.apply([], visRows(Object.assign({}, s, fp ? { show: '' } : {})).map(function (r) {
       var rs = r.bl ? r.bl.results : [];
-      return BCSV[r._i].filter(function (c, j) { var b = rs[j]; return b && ks.indexOf(b.param) >= 0 && (!s.bparam || famOf(r.section) + '|' + b.param === s.bparam); });
+      return BCSV[r._i].filter(function (c, j) {
+        var b = rs[j]; if (!b) return false;
+        if (fp && !(famMatch(fp[0], r.section) && b.param === fp.slice(1).join('|'))) return false;
+        if (s.show === 'problems') return isDev(b);
+        if (s.show === 'overridden') return !!(b.overrides && b.overrides.length);
+        return true;
+      });
     }))));
   }
   function paramsCsv() {   // what is on screen
@@ -1123,29 +1147,29 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
     }
     if (s.bparam && BLON) {
       var x = bpRows(s);
-      return csvText([['Account', 'Region', 'Resource', 'Resource type', 'Cluster', 'Engine', 'Version', 'Parameter', 'Actual', 'Expected', 'Status', 'Comes from']].concat(x.rows.map(function (y) {
+      return csvText([['Account', 'Region', 'Resource', 'Resource type', 'Cluster', 'Engine', 'Version', 'Parameter', 'Actual', 'Expected', 'Status', 'Comes from', 'Overridden on (instance=value)']].concat(x.rows.map(function (y) {
         var r = y.r, p = r.values[x.k], f = p || { from: y.b.from, group: y.b.group };
         var src = f.from === 'default' ? 'AWS default' : f.from ? (f.from === 'instance' ? 'Instance group ' : 'Cluster group ') + String(f.group || '').split('|').pop() : '';
-        return [r.account, r.region, r.name, r.type, r.cluster_name || '', r.engine, (BY[r.res_id] && BY[r.res_id].version) || '', x.k, p && p.v != null ? p.v : y.b.actual != null ? y.b.actual : '', y.b.expected, y.st.t, src];
+        return [r.account, r.region, r.name, r.type, r.cluster_name || '', r.engine, (BY[r.res_id] && BY[r.res_id].version) || '', x.k, p && p.v != null ? p.v : y.b.actual != null ? y.b.actual : '', y.b.expected, y.st.t, src,
+          (y.b.overrides || []).map(function (q) { return q.instance + '=' + q.value; }).join('; ')];
       })));
     }
-    var vis = {}; units(s).forEach(function (u) { if (u.c && u.cks) vis[u.c.res_id] = u.cks; u.mem.forEach(function (m) { vis[m.r.res_id] = m.ks; }); });
-    return csvText([CSVCOLS.parameters || []].concat([].concat.apply([], PROWS.map(function (r) {
-      var ks = vis[r.res_id]; if (!ks) return [];
-      var keys = Object.keys(r.values); return ks.filter(function (k) { return keys.indexOf(k) >= 0; }).map(function (k) { return PCSV[r._i][keys.indexOf(k)]; });
+    return csvText([CSVCOLS.parameters || []].concat([].concat.apply([], visRows(s).map(function (r) {
+      var keys = Object.keys(r.values);
+      return keys.filter(function (k) { return s.show === 'changed' ? r.values[k].nondef : s.show === 'problems' ? pStatus(r, k).c === 'bad' : true; }).map(function (k) { return PCSV[r._i][keys.indexOf(k)]; });
     }))));
   }
-  Object.keys(XF).forEach(function (k) { XF[k].addEventListener('change', function () { pSet({ res: '', cmp: '' }); }); });
+  Object.keys(XF).forEach(function (k) { XF[k].addEventListener('change', function () { pSet({ res: '' }); }); });
   XQ.addEventListener('input', function () { pSet({ pq: XQ.value }, true); });
   XQ.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); XQ.value = ''; pSet({ pq: '' }, true); } });
-  ['resource', 'group'].forEach(function (m) { $('pv-' + m).addEventListener('click', function () { pSet({ pv: m === 'resource' ? '' : m, grp: '', res: '', cmp: '' }); }); });
+  ['resource', 'group'].forEach(function (m) { $('pv-' + m).addEventListener('click', function () { pSet({ pv: m === 'resource' ? '' : m, grp: '', res: '' }); }); });
   $('xclear').addEventListener('click', function () { XQ.value = ''; Object.keys(XF).forEach(function (k) { XF[k].value = ''; }); go({ tab: 'parameters', pv: hp().pv === 'group' ? 'group' : '' }); });
   $('px-csv').addEventListener('click', function () { var s = pState(); download(fname('parameters' + (pv() === 'group' ? '_group' : s.bparam && BLON ? '_' + s.bparam.replace(/[^A-Za-z0-9_.-]+/g, '_') : '')), paramsCsv()); });
   $('px-bcsv').addEventListener('click', function () { download(fname('baseline'), baselineCsv()); });
   $('tab-parameters').addEventListener('click', function () { go({ tab: 'parameters', id: hp().id }); });
   (function () {
     var np = 0; PROWS.forEach(function (r) { np += problemKeys(r).length; });
-    $('tab-parameters').appendChild(h('span', { cls: 'n' + (np ? ' warn' : ''), id: 'tab-parameters-n', title: PA.collected ? np + ' problem(s): fails the baseline or a security rule' : 'not collected', text: PA.collected ? String(np) : '–' }));
+    $('tab-parameters').appendChild(h('span', { cls: 'n' + (np ? ' warn' : ''), id: 'tab-parameters-n', title: PA.collected ? np + ' problem(s): fails the baseline' : 'not collected', text: PA.collected ? String(np) : '–' }));
   })();
 
   /* ---------- views ---------- */
@@ -1222,8 +1246,13 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
   counts.appendChild(chip(C.clusters, 'cluster(s)'));
   counts.appendChild(chip(C.instances, 'instance(s)  (' + C.standalone_instances + ' standalone · ' + C.cluster_members + ' cluster members)'));
   if (BL.applied) {
-    var bc = chip(BL.totals.off + ' of ' + BL.totals.resources, 'off baseline  (' + BL.file + ' · sha256 ' + BL.sha_short + ')', BL.totals.off ? 'warnc bl-chip' : 'bl-chip',
-      'Parameter baseline ' + BL.file + ', sha256 ' + BL.sha256 + ', ' + BL.rules + ' rule(s). Show the problems in the Parameters tab');
+    var bt = BL.totals, sv = { high: 0, medium: 0, low: 0 };
+    (BL.accounts || []).forEach(function (a) { sv.high += a.high || 0; sv.medium += a.medium || 0; sv.low += a.low || 0; });
+    var bc = chip(bt.off + ' of ' + bt.resources, 'off baseline · ' + sv.high + ' high, ' + sv.medium + ' medium, ' + sv.low + ' low' + (bt.overridden ? ' · ' + bt.overridden + ' overridden at instance' : '') +
+      (BL.legacy_postgres ? ' · legacy postgres| rules (Aurora + RDS)' : '') + '  (' + BL.file + ' · sha256 ' + BL.sha_short + ')', bt.off ? 'warnc bl-chip' : 'bl-chip',
+      ['Parameter baseline ' + BL.file + ', sha256 ' + BL.sha256 + ', ' + BL.rules + ' rule(s).'].concat((BL.accounts || []).map(function (a) {
+        return a.account + (profOf[a.account] ? ' (' + profOf[a.account].join(', ') + ')' : '') + ': ' + a.off + ' of ' + a.resources + ' off baseline · ' + a.high + ' high, ' + a.medium + ' medium, ' + a.low + ' low';
+      }), BL.legacy_postgres ? ['The file uses legacy postgres| rules: they apply to both Aurora PostgreSQL and RDS PostgreSQL.'] : [], ['Click: show the problems in the Parameters tab']).join('\n'));
     bc.id = 'bl-chip'; bc.addEventListener('click', function () { go({ tab: 'parameters', sh: 'problems' }); }); counts.appendChild(bc);
   }
   if (C.pending_maintenance) counts.appendChild(chip(C.pending_maintenance, 'with pending maintenance', 'warnc'));

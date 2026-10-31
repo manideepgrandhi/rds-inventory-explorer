@@ -8,7 +8,7 @@
 
 def section: if type != "string" then null
     elif test("^aurora-postgresql") then "aurora-postgresql" elif test("^aurora-mysql|^aurora[0-9.]*$") then "aurora-mysql"
-    elif test("^postgres") then "postgres" elif test("^(mysql|mariadb)") then "mysql" elif test("^sqlserver") then "sqlserver"
+    elif test("^postgres") then "rds-postgres" elif test("^(mysql|mariadb)") then "mysql" elif test("^sqlserver") then "sqlserver"
     elif test("^(custom-)?oracle") then "oracle" else null end;
 # approximate DBInstanceClassMemory (GiB) from the class: AWS reserves some memory, so the real value is a bit lower
 def class_gib: if type != "string" then null else split(".") as $p
@@ -24,23 +24,12 @@ def approx($gib): if $gib == null or (type != "string") then null
     | if $c == null then null else
         reduce ($c.ops | [scan("([*/])([0-9]+)")][]) as $o ($gib * 1073741824;
             if $o[0] == "*" then . * ($o[1] | tonumber) else . / ($o[1] | tonumber) end) | floor end end;
-def off: (. // "") | ascii_downcase | . == "0" or . == "off" or . == "false";
-# list values (shared_preload_libraries ...): case-insensitive, trimmed set membership, same as the baseline "contains"
-def has_item($x): (. // "") | split(",") | map(ascii_downcase | sub("^[ \t]+"; "") | sub("[ \t]+$"; "")) | index([$x | ascii_downcase]) != null;
-def flag($n; $sec):
-    (.v // "") as $v
-    | if $n == "rds.force_ssl" and $v == "0" then "SSL not forced"
-      elif $n == "log_connections" and ($v | off) then "connection logging off"
-      elif $n == "require_secure_transport" and ($v | off) then "secure transport not required"
-      elif ($n == "rds.tls10" or $n == "rds.tls11") and ($v | ascii_downcase) == "enabled" then "\($n | ltrimstr("rds.") | ascii_upcase | sub("TLS1"; "TLS 1.")) enabled"
-      elif $n == "password_encryption" and ($v | ascii_downcase) == "md5" then "md5 passwords"
-      elif $n == "shared_preload_libraries" and ($sec == "postgres" or $sec == "aurora-postgresql") and ($v | has_item("pgaudit") | not) then "pgaudit not loaded"
-      else null end;
 def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable, dtype: .DataType, allowed: .AllowedValues};
 
 ($raw[0].regions // []) as $REG
 | [$REG[] | select(.params != null)] as $PR
-| ($PR | map(.params.list) | add // {}) as $LIST
+# data saved before 2.4.0 keys RDS PostgreSQL as "postgres"
+| ($PR | map(.params.list // {} | with_entries(if .key == "postgres" then .key = "rds-postgres" else . end)) | add // {}) as $LIST
 | ([$PR[] | . as $r | .params.groups[] | . as $g
    | (([(.system // [])[] | {key: .Name, value: pv}] | from_entries) + ([(.user // [])[] | {key: .Name, value: pv}] | from_entries)) as $vals
    | {gid: "\($r.account)|\($r.region)|\(.kind)|\(.name)", account: $r.account, region: $r.region, kind, name, family,
@@ -59,7 +48,7 @@ def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable
       | ([$gv, $d] | map(keys) | add | unique) as $ks
       | reduce $ks[] as $k ({}; .[$k] = (if $gv[$k] then $gv[$k] + {from: "instance", group: $ig} else $d[$k] + {from: "default", group: $ig} end));
   def finish($r; $sec): ($r.class | class_gib) as $gib
-      | with_entries(.key as $n | .value |= (. + {nondef: (.src == "user"), approx: (.v | approx($gib)), flag: flag($n; $sec)}
+      | with_entries(.key as $n | .value |= (. + {nondef: (.src == "user"), approx: (.v | approx($gib))}
                                              | with_entries(select(.value != null))))
       | with_entries(select(.key as $n | (($LIST[$sec] // []) | index([$n])) != null));
   [.resources[] | select(.type != "global" and $HAS["\(.account)|\(.region)"] and (.engine | test("^(docdb|neptune)") | not)) | . as $r
@@ -103,8 +92,8 @@ def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable
     notes: ["Oracle: sqlnet encryption / checksum (NATIVE_NETWORK_ENCRYPTION) is set in the option group, not the parameter group; the option group names are shown.",
             "\u2248 values are approximate: DBInstanceClassMemory is estimated from the instance class (AWS reserves part of it); omitted when the class is unknown."]}
 | .meta.csv_columns.parameters = ["Account", "Region", "Resource", "Resource type", "Cluster", "Engine", "Parameter", "Value", "Approx. computed",
-                                  "Source", "From", "Parameter group", "Non-default", "Flag", "Apply type", "Apply status"]
+                                  "Source", "From", "Parameter group", "Non-default", "Apply type", "Apply status"]
 | .parameters.csv = [$ROWS[] | . as $r | .values | to_entries[] | .key as $n | .value as $v
     | [$r.account, $r.region, $r.name, $r.type, ($r.cluster_name // ""), $r.engine, $n, ($v.v // ""), ($v.approx // "" | tostring),
-       ($v.src // ""), ($v.from // ""), ($v.group // "" | split("|") | last), (if $v.nondef then "yes" else "no" end), ($v.flag // ""),
+       ($v.src // ""), ($v.from // ""), ($v.group // "" | split("|") | last), (if $v.nondef then "yes" else "no" end),
        ($v.apply // ""), ([$r.apply_status, $r.cluster_apply_status] | map(select(. != null)) | join(" / "))]]

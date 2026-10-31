@@ -1,6 +1,6 @@
 # baseline_parse.jq - reads a parameters.baseline file as plain text (never sourced / evaluated).
 # Usage: jq -Rs -f baseline_parse.jq FILE  ->  {rules: [{line, family, param, rule, value, sev}], errors: ["line N: ..."]}
-def FAMILIES: ["postgres", "aurora-postgresql", "mysql", "aurora-mysql", "sqlserver", "oracle"];
+def FAMILIES: ["postgres", "aurora-postgresql", "rds-postgres", "mysql", "aurora-mysql", "sqlserver", "oracle"];
 def RULES: ["=", "!=", "in", "contains", "!contains", ">", ">=", "<", "<=", "between", "set"];
 def trim: sub("^[ \t]+"; "") | sub("[ \t]+$"; "");
 def isnum: test("^-?[0-9]+(\\.[0-9]+)?$");
