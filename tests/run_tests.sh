@@ -45,6 +45,9 @@ res()  { jq -c --arg n "$2" '[.resources[] | select(.name == $n)][0]' "$OUT/$1.j
 rt()   { if res "$1" "$2" | jq -e "$3" >/dev/null 2>&1; then ok "$1 $2: $3"; else bad "$1 $2: $3 (got $(res "$1" "$2" | jq -c "$3" 2>&1 | head -c 400))"; fi; }
 calls(){ jq -r 'select(.[0] != "--version" and .[0] != "configure") | join(" ")' "$MOCK_LOG"; }
 FLEET=(-P "prod,nonprod,broken" -A)
+# Test fixture: the bundled baseline with its commented PostgreSQL rules switched on
+mkdir -p "$OUT/fx"; FULLBL="$OUT/fx/parameters.baseline.example"
+sed -E 's/^# (postgres[[:space:]]*\|)/\1/' "$HERE/../lib/parameters.baseline.example" >"$FULLBL"
 
 echo "== static"
 chk "shellcheck script + tests" shellcheck "$SCRIPT" "$HERE/run_tests.sh" "$HERE/validate_cli.sh"
@@ -55,7 +58,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.3\.1"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.3\.2"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -227,7 +230,7 @@ chk "data file written next to the HTML" test -s "$SD"
 chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
 chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data*' 2>/dev/null)"
 dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
-dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.3.1" and .merged == false'
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.3.2" and .merged == false'
 dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
 dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
 dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
@@ -314,7 +317,7 @@ t mnone 1 fleet --merge;              has mnone err "--merge"
 
 echo "== insights"
 export MOCK_AUDIT=1
-t aud 0 fleet "${FLEET[@]}" -F html,csv --save-data --with-parameters
+t aud 0 fleet "${FLEET[@]}" -F html,csv --save-data --with-parameters --baseline "$FULLBL"
 AUD="$(find "$OUT/aud" -name '*.html' | head -1)"; AUDF="$(find "$OUT/aud" -name '*_insights_findings.csv' | head -1)"
 chk "file names carry the account tag" test -n "$(find "$OUT/aud" -name 'rds_inventory_explorer_111111111111_222222222222_20261017_063000*' | head -1)"
 chk "-F html,csv --with-parameters writes html + 5 CSVs (incl. baseline) + data" test "$(find "$OUT/aud" -type f | wc -l)" -eq 7
@@ -415,12 +418,13 @@ jq '.accounts[0].account = "12345"' "$PSD" >"$OUT/p_badacct.json"; t pbadacct 3 
 
 echo "== parameter baseline"
 export MOCK_PG18=1
-t bl 0 fleet "${FLEET[@]}" --with-parameters --csv --save-data
+chk "bundled baseline ships with every postgres rule commented out" test "$(grep -cE '^postgres[[:space:]]*\|' "$HERE/../lib/parameters.baseline.example")" -eq 0
+t bl 0 fleet "${FLEET[@]}" --with-parameters --csv --save-data --baseline "$FULLBL"
 BLC="$(find "$OUT/bl" -name '*_baseline.csv' | head -1)"; BLH="$(find "$OUT/bl" -name '*.html' | head -1)"; BLD="$(find "$OUT/bl" -name '*_data.json' | head -1)"
 blr() { jq -c --arg n "$1" --arg p "$2" '[.parameters.rows[] | select(.name == $n) | .bl.results[] | select(.param == $p) | .status]' "$OUT/bl.json"; }
 blt() { local g; g="$(blr "$1" "$2")"; if [[ "$g" == "$3" ]]; then ok "baseline $1 $2 = $3"; else bad "baseline $1 $2: got $g expected $3"; fi; }
 jqt bl '.baseline.applied and .baseline.file == "parameters.baseline.example" and (.baseline.sha_short | test("^[0-9a-f]{12}$")) and .baseline.rules > 30'
-jqt bl '.baseline.sha256 == "'"$(sha256sum "$HERE/../lib/parameters.baseline.example" | cut -c1-64)"'"'
+jqt bl '.baseline.sha256 == "'"$(sha256sum "$FULLBL" | cut -c1-64)"'"'
 blt analytics-pg18 log_connections '["pass"]'          # PG18: receipt,authentication,authorization,... list
 blt reports-pg18 log_connections '["fail"]'            # PG18: receipt only
 blt analytics-pg18 shared_preload_libraries '["pass"]' # " PGAUDIT " spaces + case
@@ -458,14 +462,14 @@ chk "bad baseline writes no report" test -z "$(find "$OUT/blbad" -name '*.html' 
 t blmiss 1 fleet "${FLEET[@]}" --with-parameters --baseline "$OUT/nope.bl"; has blmiss err "nope.bl"
 printf '$(touch %s/blpwned)\n' "$OUT" >"$OUT/inj.bl"; t blinj 1 fleet --with-parameters -P prod --baseline "$OUT/inj.bl"
 chk "baseline file is never executed" test ! -e "$OUT/blpwned"
-sed 's/pg_stat_statements,pgaudit,pg_tle/pg_stat_statements,pgaudit/' "$HERE/../lib/parameters.baseline.example" >"$OUT/my.baseline"
+sed 's/pg_stat_statements,pgaudit,pg_tle/pg_stat_statements,pgaudit/' "$FULLBL" >"$OUT/my.baseline"
 printf 'profile = prod\nall_regions = yes\nbaseline = %s\n' "$OUT/my.baseline" >"$OUT/bl.conf"
 t blconf 0 fleet -c "$OUT/bl.conf" --with-parameters
 jqt blconf '.baseline.file == "my.baseline"'
 t blmerge 0 fleet --merge "$BLD" --baseline "$OUT/my.baseline"
 jqt blmerge '.baseline.file == "my.baseline" and .baseline.sha256 == "'"$(sha256sum "$OUT/my.baseline" | cut -c1-64)"'" and .baseline.sha256 != "'"$(jq -r .baseline.sha256 "$OUT/bl.json")"'"'
 jqt blmerge '[.parameters.rows[] | select(.name == "pay-aurora-use1") | .bl.results[] | select(.param == "shared_preload_libraries") | .status] == ["pass"]'
-t blmerge0 0 fleet --merge "$BLD"
+t blmerge0 0 fleet --merge "$BLD" --baseline "$FULLBL"
 jqt blmerge0 '.baseline.sha256 == "'"$(jq -r .baseline.sha256 "$OUT/bl.json")"'"'
 unset MOCK_PG18
 unset MOCK_AUDIT
