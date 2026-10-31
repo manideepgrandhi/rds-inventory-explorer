@@ -1,0 +1,113 @@
+# parameters.list - parameters the Parameters tab shows (rds_inventory_explorer.sh --with-parameters).
+# One [section] per engine family; one parameter name per line; # comments. Edit freely: only these names are kept.
+# Sections: aurora-postgresql, postgres, sqlserver, oracle, mysql, aurora-mysql (mariadb uses mysql).
+# Oracle: sqlnet encryption / checksum settings live in the OPTION group (NATIVE_NETWORK_ENCRYPTION), not here.
+
+[aurora-postgresql]
+rds.force_ssl
+ssl_min_protocol_version
+password_encryption
+log_connections
+log_disconnections
+log_min_duration_statement
+log_statement
+log_lock_waits
+log_autovacuum_min_duration
+pgaudit.log
+shared_preload_libraries
+shared_buffers
+work_mem
+maintenance_work_mem
+effective_cache_size
+max_connections
+idle_in_transaction_session_timeout
+statement_timeout
+idle_session_timeout
+autovacuum
+autovacuum_max_workers
+autovacuum_vacuum_scale_factor
+autovacuum_vacuum_cost_limit
+rds.logical_replication
+max_wal_senders
+max_replication_slots
+track_io_timing
+track_activity_query_size
+random_page_cost
+apg_plan_mgmt.capture_plan_baselines
+apg_plan_mgmt.use_plan_baselines
+
+[postgres]
+rds.force_ssl
+ssl_min_protocol_version
+password_encryption
+log_connections
+log_disconnections
+log_min_duration_statement
+log_statement
+log_lock_waits
+log_autovacuum_min_duration
+pgaudit.log
+shared_preload_libraries
+shared_buffers
+work_mem
+maintenance_work_mem
+effective_cache_size
+max_connections
+idle_in_transaction_session_timeout
+statement_timeout
+idle_session_timeout
+autovacuum
+autovacuum_max_workers
+autovacuum_vacuum_scale_factor
+autovacuum_vacuum_cost_limit
+rds.logical_replication
+max_wal_senders
+max_replication_slots
+wal_keep_size
+track_io_timing
+track_activity_query_size
+random_page_cost
+
+[sqlserver]
+rds.force_ssl
+rds.tls10
+rds.tls11
+contained database authentication
+max degree of parallelism
+cost threshold for parallelism
+optimize for ad hoc workloads
+max server memory (mb)
+remote access
+clr enabled
+
+[oracle]
+audit_trail
+sec_case_sensitive_logon
+processes
+sessions
+open_cursors
+sga_target
+pga_aggregate_target
+memory_target
+
+[mysql]
+require_secure_transport
+tls_version
+slow_query_log
+long_query_time
+general_log
+binlog_format
+server_audit_logging
+max_connections
+innodb_buffer_pool_size
+
+[aurora-mysql]
+require_secure_transport
+tls_version
+slow_query_log
+long_query_time
+general_log
+binlog_format
+server_audit_logging
+max_connections
+innodb_buffer_pool_size

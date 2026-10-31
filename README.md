@@ -5,12 +5,15 @@
 - One file, no server, no internet needed. The data is embedded in the page and nothing is loaded from the network (CSP `default-src 'none'`).
 - **No CloudWatch, no secret values.** Only `sts get-caller-identity`, `ec2 describe-regions` and `rds describe-*` calls are made. The script refuses anything else (`read_only_guard`). It shows the ARN of a managed master secret, never its value.
 - A **Pending maintenance** tab lists every pending action across the fleet, sorted by urgency.
-- An **Insights** tab summarises the fleet (engines, versions, classes, Multi-AZ, storage) and lists configuration findings (17 checks: public access, encryption, deletion protection, backups, monitoring and more). All three tabs export to **CSV**.
+- An **Insights** tab summarises the fleet (engines, versions, classes, Multi-AZ, storage) and lists configuration findings (23 checks: public access, encryption, deletion protection, backups, monitoring and more). All tabs export to **CSV**.
+- An opt-in **Parameters** tab (`--with-parameters`) shows the effective value of a curated list of parameters for every cluster and instance (instance group, then cluster group, then engine default), with drift and 6 more Insights checks.
 - Errors in one account or region (AccessDenied, SCP, throttling, expired SSO) are recorded and shown in the page. They never stop the run.
 
 ![Cluster card](docs/screenshot.png)
 
 ![Insights tab](docs/insights.png)
+
+![Parameters tab](docs/parameters.png)
 
 A sample page built from the test mock is in [samples/sample.html](samples/sample.html). Download it and open it in a browser.
 
@@ -112,8 +115,28 @@ Built only from the data already collected (no extra AWS calls). The account and
 | `old_generation` | Low | Previous-generation class |
 | `gp2_storage` | Low | gp2 storage |
 | `stopped` | Low | Stopped |
+| `default_param_group` | Medium | Default parameter group in use (`default.*` cluster or instance group; no extra calls) |
+| `ssl_not_forced` | High | SSL / TLS not forced (`rds.force_ssl`, `require_secure_transport`) * |
+| `tls_old_enabled` | High | TLS 1.0 / 1.1 enabled (SQL Server `rds.tls10` / `rds.tls11`) * |
+| `conn_logging_off` | Medium | Connection logging off (`log_connections`) * |
+| `md5_password` | Medium | md5 password encryption * |
+| `param_pending_reboot` | Low | Parameter change pending reboot * |
+
+\* needs `--with-parameters`; without it the tab marks these checks "not run". A member is flagged only for values that come from its own instance group; cluster-group values are flagged on the cluster.
 
 `--skip-checks id,id` turns checks off (the tab lists what was skipped). Not checked: engine version in Extended Support, because `describe-db-*` only shows the enrollment setting, not whether the version is past standard support.
+
+## Parameters tab (`--with-parameters`)
+
+Opt-in (`--with-parameters`, or `with-parameters=true` in the config file). Only the names in `lib/parameters.list` are kept (one `[section]` per engine family: aurora-postgresql, postgres, aurora-mysql, mysql / mariadb, sqlserver, oracle); edit the list freely.
+
+- **Calls (read-only, few):** per region, `describe-db-parameter-groups` and `describe-db-cluster-parameter-groups` once; per **in-use** group, `describe-db(-cluster)-parameters --source user` and `--source system` (never the full page-through); engine defaults once per family and group kind per account + region with `describe-engine-default(-cluster)-parameters --db-parameter-group-family`, cached. An error (AccessDenied ...) is recorded on that group and in the error list, never fatal; that group's resources show "not read" instead of guessed defaults. The step's elapsed time is printed in the log and in the page footer.
+- **Effective value:** a group's value is user > system > engine default. For a cluster member: instance group, then cluster group, then engine default; the **From** column says which. Standalone instances use their instance group.
+- **By resource:** clusters with their members indented beneath them, global cluster membership, cluster and instance group links, `ParameterApplyStatus` (pending-reboot shown). Non-default values are highlighted and risky ones flagged. Formula values (`{DBInstanceClassMemory*3/4}`) show an **approximate** computed value from the class memory (≈, labelled approximate; `LEAST`/`GREATEST` formulas are not computed). Oracle shows the option group note (sqlnet encryption lives in the option group).
+- **By parameter group:** every in-use group with type, family, non-default count, `default.*` groups flagged ("⚑ default group in use"), and used-by links to each cluster / instance. The card's parameter group rows link to the group and to the resource's values (two-way).
+- **Drift:** parameters with more than one effective value within an engine family, with the resources per value.
+- **Filters:** account, region, engine, group, parameter, non-default only, flagged only. **Export CSV** downloads the current view (formula-guarded); with no filters the By-resource CSV is byte-identical to the script's `…_parameters.csv`.
+- **Merge:** `--save-data` carries the parameter data; `--merge` validates it (group kind, names, value types). Data files without it (v2.0.0, or a run without the flag) still merge, and the tab notes "Parameters not collected for account X".
 
 ## What each card shows
 
@@ -135,8 +158,9 @@ Built only from the data already collected (no extra AWS calls). The account and
 | `--include-docdb` | Also list DocumentDB and Neptune clusters. |
 | `-o, --output-dir DIR` | Output directory (default: the current directory). It is created if missing. |
 | `--prefix NAME` | File name prefix. |
-| `-F, --format LIST` | `html`, `csv` or `html,csv` (default `html`). CSV writes `…_inventory.csv`, `…_pending.csv` and `…_insights_findings.csv`, byte-identical to the page's Export CSV buttons with no filters. |
+| `-F, --format LIST` | `html`, `csv` or `html,csv` (default `html`). CSV writes `…_inventory.csv`, `…_pending.csv`, `…_insights_findings.csv` (and `…_parameters.csv` with `--with-parameters`), byte-identical to the page's Export CSV buttons with no filters. |
 | `--csv` | Same as `-F html,csv`. |
+| `--with-parameters` | Collect the Parameters tab (see above). Adds `…_parameters.csv` to `-F csv`. |
 | `--skip-checks LIST` | Insights check ids to skip (see the table above). |
 | `-c, --config FILE` | key=value settings (long option names; never sourced). Command-line options override it. See `rds_inventory_explorer.conf.example`. |
 | `--tz ZONE` | Second time zone shown next to UTC (default `Asia/Kolkata`). |
@@ -145,7 +169,7 @@ Built only from the data already collected (no extra AWS calls). The account and
 | `--dry-run` | Print the calls that would run, and call nothing. |
 | `--save-data` | Also write `<stem>_data.json`: the page's dataset plus the raw describe output, with the schema version, script version, generation time, accounts and the regions scanned. This is the input for `--merge`. |
 | `--merge FILE\|DIR...` | Build one report from saved data files, with no AWS calls and no credentials (see below). Takes files, globs or folders. Works with `-o`, `--prefix`, `-F`, `--skip-checks`, `--save-data` and `--tz`. |
-| `-v`, `-h`, `-V` | Verbose, help, version (2.0.0). |
+| `-v`, `-h`, `-V` | Verbose, help, version (2.1.0). |
 
 **Exit codes:**
 
@@ -204,14 +228,20 @@ Read-only. The AWS managed policy `ReadOnlyAccess` covers these, or use this min
       "rds:DescribeDBInstances",
       "rds:DescribeDBClusterEndpoints",
       "rds:DescribePendingMaintenanceActions",
-      "rds:DescribeCertificates"
+      "rds:DescribeCertificates",
+      "rds:DescribeDBParameterGroups",
+      "rds:DescribeDBClusterParameterGroups",
+      "rds:DescribeDBParameters",
+      "rds:DescribeDBClusterParameters",
+      "rds:DescribeEngineDefaultParameters",
+      "rds:DescribeEngineDefaultClusterParameters"
     ],
     "Resource": "*"
   }]
 }
 ```
 
-No CloudWatch, Secrets Manager or KMS permissions are needed. The script never calls those services.
+The last six are needed only with `--with-parameters` (CLI: `describe-db-parameter-groups`, `describe-db-cluster-parameter-groups`, `describe-db-parameters`, `describe-db-cluster-parameters`, `describe-engine-default-parameters`, `describe-engine-default-cluster-parameters`); without them the run still completes and records the errors. No CloudWatch, Secrets Manager or KMS permissions are needed. The script never calls those services.
 
 ## Tests
 
@@ -229,6 +259,7 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
   - When `node` with `puppeteer-core` on `NODE_PATH` and Chrome are available, it also runs `tests/browser_check.js`. That drives the page in headless Chrome: search suggestions, filters, the card, links, the hash, Copy JSON, the theme, the Pending tab (hash, filters, search, sort, count strip, badge navigation, empty state), CSV export (the downloaded bytes are compared with the `--csv` files, plus one real Chrome download), layout at 680 / 900 / 1280 px and mobile dark, and no JS errors or network requests.
   - It checks `--save-data` and `--merge`: the data file round trip, a merge of three files where one account appears twice (the newer file wins and the log says so), and that the merged model and CSVs match a single scan. It also checks that urgency is recomputed at merge time, that bad, HTML, old-schema, newer-schema and partial files fail with exit code 3, and that the merge makes 0 AWS calls. The merge runs in a simulated Git Bash: no `aws` on PATH, a jq that writes CRLF, a `date` without `-d`, `C:\` and `/c/` paths, and spaces in paths. The browser check is run again on the merged page.
   - **Insights:** an audit fleet (`MOCK_AUDIT=1`) where every one of the 17 checks fires, `--skip-checks` (valid and unknown ids), `-F` (html,csv / csv / bad), the findings CSV, the config file (and that it is never executed), mode 0640, and rejected merge files (bad account, path-like region, non-list data, bad errors). `tests/insights_check.js` drives the tab: totals, bars, filters, CSV export equal to the script CSV, facet click to a filtered Inventory with its chip, mobile width, no JS errors, no network. A tampered merge with `<img onerror>` and `</script>` in a name is rendered to prove nothing executes.
+  - **Parameters:** the audit fleet with `--with-parameters`: only `--source user` / `system` calls, engine defaults once per family, effective-value precedence (instance > cluster > default), system values, approximate formulas, unlisted names dropped, pending-reboot, an AccessDenied group, used-by, drift, the parameters CSV, the dry run, the config key, `--skip-checks`, merge with a file without parameters ("not collected"), group de-duplication and rejected tampered parameter data. `tests/params_check.js` drives the tab: the three views, members under clusters, effective values, card ↔ group links both ways, filters, CSV export equal to the script CSV, drift, mobile, no JS errors, no network, and a tampered merge with `<img onerror>` in a parameter value.
   - It checks the `--csv` files: names, mode 640, BOM, CRLF, quoting, the formula guard, and that header and values match the model (Python's `csv` module as the parser).
 - **`validate_cli.sh`** replays every command line the script issues through the real CLI, so syntax, `--query` and parameter validation are checked. It also runs negative controls, checks the mock output shapes against `--generate-cli-skeleton output`, and runs a full `-A` end to end through `tests/fake_aws_endpoint.py`. That run checks paging, that the probe skips the empty region, and that no CloudWatch, Secrets Manager or KMS request is made.
 
@@ -238,6 +269,8 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
 rds_inventory_explorer.sh        the script
 lib/explorer.jq                  raw AWS JSON -> page model
 lib/insights.jq                  fleet facets + findings (Insights tab, findings CSV)
+lib/parameters.jq                parameter groups -> effective values, drift, parameters CSV
+lib/parameters.list              parameters kept per engine family (edit freely)
 lib/csv.jq                       page model -> CSV (used by -F csv)
 lib/merge.jq                     saved data files -> one dataset (used by --merge)
 lib/explorer_template.html       page (CSS + JS), data placeholder /*__EXPLORER_DATA__*/
@@ -246,11 +279,18 @@ EXAMPLES.md                      command examples
 samples/sample.html              page built from the test mock (fake accounts)
 docs/screenshot.png              cluster card from the sample
 docs/insights.png                Insights tab from the sample
-tests/                           run_tests.sh, validate_cli.sh, browser_check.js, insights_check.js, fake_aws_endpoint.py, mock/aws
+docs/parameters.png              Parameters tab from the sample
+tests/                           run_tests.sh, validate_cli.sh, browser_check.js, insights_check.js, params_check.js, fake_aws_endpoint.py, mock/aws
 ```
 
 ## Changelog
 
+- **2.1.0**
+  - **Parameters tab** (opt-in `--with-parameters` / `with-parameters=true`): cluster-aware effective values (instance group > cluster group > engine default), members under their clusters, global cluster membership, pending-reboot status, approximate formula values, Oracle option group note. Views by resource, by parameter group (two-way links with the cards) and drift; filters; CSV export of the current view; `…_parameters.csv`.
+  - Few calls: `--source user` and `--source system` per in-use group, engine defaults once per family per account + region (cached). Elapsed time in the log and footer. Errors per group, never fatal.
+  - Insights: `default_param_group` (Medium, no extra calls) plus `ssl_not_forced`, `tls_old_enabled`, `conn_logging_off`, `md5_password`, `param_pending_reboot` (need `--with-parameters`). All skippable.
+  - `--save-data` / `--merge` carry and validate the parameter data; older files still merge ("not collected for account X").
+  - Narrow screens: the tab bar scrolls instead of overflowing.
 - **2.0.0**
   - Moved to its own repository (`manideepgrandhi/rds-inventory-explorer`) with a release zip and `.sha256` checksum, built by a workflow pinned to a commit SHA.
   - **Insights tab:** fleet totals, CSS bars (no inline scripts or styles; CSP stays `default-src 'none'`), click-through to a filtered Inventory, per-account summary, findings table with filters and CSV export. 17 checks in `lib/insights.jq`, Aurora-aware.

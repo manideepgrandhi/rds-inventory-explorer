@@ -13,6 +13,12 @@
 # Skip Insights checks you do not care about
 ./rds_inventory_explorer.sh -A --skip-checks default_port,gp2_storage,stopped
 
+# Parameters tab: effective values of the curated parameters, drift, parameter Insights checks (+ _parameters.csv)
+./rds_inventory_explorer.sh -P prod -A --with-parameters -F html,csv
+
+# Open a report on the parameter group view or on one group's drift
+#   report.html#tab=parameters&pv=group     report.html#tab=parameters&pv=drift
+
 # See the exact AWS calls first, without calling anything
 ./rds_inventory_explorer.sh -P prod -A --dry-run
 

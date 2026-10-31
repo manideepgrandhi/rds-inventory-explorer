@@ -7,6 +7,7 @@ all-regions=true
 # probe-parallel=8
 # include-docdb=false
 format=html,csv
+# with-parameters=true
 # skip-checks=default_port,gp2_storage
 # save-data=true
 # output-dir=./reports

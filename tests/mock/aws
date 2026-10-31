@@ -35,7 +35,12 @@ PROBE = {"--max-records"}
 ALLOWED = {("sts", "get-caller-identity"): set(), ("ec2", "describe-regions"): set(),
            ("rds", "describe-db-clusters"): PROBE, ("rds", "describe-db-instances"): PROBE, ("rds", "describe-global-clusters"): set(),
            ("rds", "describe-db-cluster-endpoints"): set(), ("rds", "describe-pending-maintenance-actions"): set(),
-           ("rds", "describe-certificates"): set()}
+           ("rds", "describe-certificates"): set(),
+           ("rds", "describe-db-parameter-groups"): set(), ("rds", "describe-db-cluster-parameter-groups"): set(),
+           ("rds", "describe-db-parameters"): {"--db-parameter-group-name", "--source"},
+           ("rds", "describe-db-cluster-parameters"): {"--db-cluster-parameter-group-name", "--source"},
+           ("rds", "describe-engine-default-parameters"): {"--db-parameter-group-family"},
+           ("rds", "describe-engine-default-cluster-parameters"): {"--db-parameter-group-family"}}
 g, o, pos, i = {}, {}, [], 0
 while i < len(argv):
     a = argv[i]
@@ -123,7 +128,7 @@ def inst(ident, engine, ver, cls="db.r6g.large", cluster=None, az="a", tg=None, 
          "Endpoint": {"Address": "%s.cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION), "Port": port, "HostedZoneId": "Z2R2ITUGPM61AM"},
          "InstanceCreateTime": t(-400), "PreferredBackupWindow": "20:30-21:00", "BackupRetentionPeriod": kw.get("ret", 7),
          "VpcSecurityGroups": [{"VpcSecurityGroupId": "sg-0db0000000000001", "Status": "active"}],
-         "DBParameterGroups": [{"DBParameterGroupName": kw.get("pg", "default.%s" % engine), "ParameterApplyStatus": "in-sync"}],
+         "DBParameterGroups": [{"DBParameterGroupName": kw.get("pg", "default.%s" % engine), "ParameterApplyStatus": kw.get("pgst", "in-sync")}],
          "AvailabilityZone": REGION + az, "DBSubnetGroup": subnet(), "PreferredMaintenanceWindow": kw.get("mw", "sun:22:00-sun:22:30"),
          "MultiAZ": kw.get("maz", False), "AutoMinorVersionUpgrade": kw.get("auto", True), "PubliclyAccessible": kw.get("public", False),
          "StorageType": kw.get("st", "aurora" if cluster else "gp3"), "StorageEncrypted": kw.get("enc", True), "KmsKeyId": kms(),
@@ -199,14 +204,14 @@ if SCEN == "large":
 elif SCEN != "empty":
     if ACCT == "111111111111" and REGION == "us-east-1":
         # global primary (managed master password in Secrets Manager)
-        CL.append(cluster("pay-aurora-use1", "aurora-postgresql", "16.6", [("pay-use1-1", True), ("pay-use1-2", False)], tg=PAY, managed=True, glob="pay-global"))
-        INS += [inst("pay-use1-1", "aurora-postgresql", "16.6", "db.r6g.2xlarge", cluster="pay-aurora-use1", tg=PAY, tier=0),
-                inst("pay-use1-2", "aurora-postgresql", "16.6", "db.r6g.2xlarge", cluster="pay-aurora-use1", az="b", tg=PAY, auto=False)]
+        CL.append(cluster("pay-aurora-use1", "aurora-postgresql", "16.6", [("pay-use1-1", True), ("pay-use1-2", False)], tg=PAY, managed=True, glob="pay-global", cpg="pay-apg16-cluster"))
+        INS += [inst("pay-use1-1", "aurora-postgresql", "16.6", "db.r6g.2xlarge", cluster="pay-aurora-use1", tg=PAY, tier=0, pg="pay-apg16-instance"),
+                inst("pay-use1-2", "aurora-postgresql", "16.6", "db.r6g.2xlarge", cluster="pay-aurora-use1", az="b", tg=PAY, auto=False, pg="pay-apg16-instance", pgst="pending-reboot")]
         # regional Aurora MySQL cluster with a custom endpoint
         OT = tags("prod", "orders-team", "orders")
         CL.append(cluster("orders-aurora", "aurora-mysql", "8.0.mysql_aurora.3.08.2", [("orders-1", True), ("orders-2", False), ("orders-3", False)], tg=OT,
                           custom=["orders-reporting.cluster-custom-cxyzabc123.us-east-1.rds.amazonaws.com"], user="admin", st="aurora-iopt1"))
-        INS += [inst("orders-%d" % k, "aurora-mysql", "8.0.mysql_aurora.3.08.2", "db.r7g.xlarge", cluster="orders-aurora", az="abc"[k - 1], tg=OT, lic="general-public-license")
+        INS += [inst("orders-%d" % k, "aurora-mysql", "8.0.mysql_aurora.3.08.2", "db.r7g.xlarge", cluster="orders-aurora", az="abc"[k - 1], tg=OT, lic="general-public-license", pg="orders-mysql80")
                 for k in (1, 2, 3)]
         EP += [{"DBClusterEndpointIdentifier": "orders-reporting", "DBClusterIdentifier": "orders-aurora", "DBClusterEndpointResourceIdentifier": "cluster-endpoint-ABC123",
                 "Endpoint": "orders-reporting.cluster-custom-cxyzabc123.us-east-1.rds.amazonaws.com", "Status": "available", "EndpointType": "CUSTOM",
@@ -239,7 +244,7 @@ elif SCEN != "empty":
                     {"Action": "ca-certificate-rotation", "AutoAppliedAfterDate": t(-3), "ForcedApplyDate": t(12),
                      "Description": 'Rotate CA to "rds-ca-rsa2048-g1", restart required'}]}]
     if ACCT == "111111111111" and REGION == "ap-south-1":
-        CL.append(cluster("pay-aurora-aps1", "aurora-postgresql", "16.6", [("pay-aps1-1", False)], tg=PAY, master=False, glob="pay-global", wf=True))
+        CL.append(cluster("pay-aurora-aps1", "aurora-postgresql", "16.6", [("pay-aps1-1", False)], tg=PAY, master=False, glob="pay-global", wf=True, cpg="pay-apg16-cluster"))
         INS.append(inst("pay-aps1-1", "aurora-postgresql", "16.6", "db.r6g.2xlarge", cluster="pay-aurora-aps1", tg=PAY))
         INS.append(inst("crm-pg-replica-aps1", "postgres", "16.8", "db.m6i.xlarge", tg=tags("dr", "crm-team", "crm"), src=arn("db", "crm-pg", "us-east-1"), ret=1, gb=500))
     if ACCT == "111111111111" and REGION in ("us-east-1", "ap-south-1"):
@@ -251,7 +256,7 @@ elif SCEN != "empty":
                                             {"DBClusterArn": a, "Readers": [], "IsWriter": False, "GlobalWriteForwardingStatus": "enabled", "SynchronizationStatus": "connected"}]})
     if ACCT == "222222222222" and REGION == "ap-south-1":
         INS.append(inst("qa-mysql", "mysql", "8.0.40", "db.t4g.medium", tg=tags("qa", "qa-team", "orders</script><b>x"), public=True, gb=50, st="gp3",
-                        lic="general-public-license", dp=False, ret=1, port=3306))
+                        lic="general-public-license", dp=False, ret=1, port=3306, pg="qa-mysql80"))
         INS[-1]["TagList"].append({"Key": "cost-center", "Value": "=HYPERLINK(\"http://x\")"})   # CSV formula-injection probe
         # Insights audit probes (MOCK_AUDIT=1): a stopped, unencrypted previous-generation instance and a stopped unencrypted Aurora cluster
         if os.environ.get("MOCK_AUDIT") == "1":
@@ -262,6 +267,79 @@ elif SCEN != "empty":
           INS.append(inst("legacy-apg-1", "aurora-postgresql", "13.18", "db.r4.large", cluster="legacy-apg", status="stopped", enc=False, mon=0, pi=False))
         PMA += [{"ResourceIdentifier": arn("db", "qa-mysql"), "PendingMaintenanceActionDetails": [   # no date at all
                     {"Action": "db-upgrade", "Description": "Upgrade to MySQL 8.0.42"}]}]
+
+# ---- parameter groups (--with-parameters). Families of the groups in use; values per (group, source)
+FAMILY = {"default.aurora-postgresql": "aurora-postgresql16", "default.postgres": "postgres16", "default.sqlserver-se": "sqlserver-se-15.0",
+          "default.aurora-mysql": "aurora-mysql8.0", "default.mysql": "mysql8.0", "pay-apg16-instance": "aurora-postgresql16",
+          "pay-apg16-cluster": "aurora-postgresql16", "aurora-postgresql-custom": "aurora-postgresql13", "aurora-mysql-custom": "aurora-mysql8.0",
+          "orders-mysql80": "aurora-mysql8.0", "ledger-pg16": "postgres16", "crm-pg16": "postgres16", "qa-mysql80": "mysql8.0",
+          "docdb-custom": "docdb5.0", "default.docdb": "docdb5.0"}
+CLUSTER_GROUPS = {"pay-apg16-cluster", "aurora-postgresql-custom", "aurora-mysql-custom", "ledger-pg16", "docdb-custom"}
+
+
+def P(name, val, src, apply="dynamic", dtype="string", allowed=None):
+    d = {"ParameterName": name, "Description": "mock " + name, "Source": src, "ApplyType": apply, "DataType": dtype, "IsModifiable": src != "system",
+         "ApplyMethod": "pending-reboot", "SupportedEngineModes": ["provisioned"]}
+    if val is not None:
+        d["ParameterValue"] = val
+    if allowed:
+        d["AllowedValues"] = allowed
+    return d
+
+
+PG_DEF = [P("rds.force_ssl", "1", "engine-default", dtype="boolean", allowed="0,1"), P("log_connections", None, "engine-default", dtype="boolean", allowed="0,1"),
+          P("password_encryption", "scram-sha-256", "engine-default", allowed="md5,scram-sha-256"),
+          P("shared_preload_libraries", "pg_stat_statements", "engine-default", "static", allowed="auto_explain,pg_stat_statements,pgaudit," + ",".join("lib%03d" % k for k in range(80))),
+          P("shared_buffers", "{DBInstanceClassMemory/32768}", "engine-default", "static", "integer", "16-1073741823"),
+          P("effective_cache_size", "{DBInstanceClassMemory*3/32768}", "engine-default", dtype="integer"),
+          P("work_mem", "4096", "engine-default", dtype="integer"), P("max_connections", "LEAST({DBInstanceClassMemory/9531392},5000)", "engine-default", "static", "integer"),
+          P("autovacuum", "1", "engine-default", dtype="boolean"), P("log_statement", "none", "engine-default"), P("random_page_cost", "4", "engine-default", dtype="real"),
+          P("unlisted_param", "x", "engine-default")]
+DEFAULTS = {
+    ("cluster", "aurora-postgresql16"): PG_DEF[:3] + [P("shared_preload_libraries", "pg_stat_statements", "engine-default", "static"), P("apg_plan_mgmt.capture_plan_baselines", "off", "engine-default")],
+    ("instance", "aurora-postgresql16"): PG_DEF[3:],
+    ("cluster", "aurora-postgresql13"): PG_DEF[:3], ("instance", "aurora-postgresql13"): PG_DEF[3:],
+    ("instance", "postgres16"): PG_DEF + [P("wal_keep_size", "2048", "engine-default", dtype="integer")], ("cluster", "postgres16"): PG_DEF,
+    ("instance", "sqlserver-se-15.0"): [P("rds.force_ssl", "0", "engine-default", "static"), P("rds.tls10", "default", "engine-default", "static"),
+                                        P("rds.tls11", "default", "engine-default", "static"), P("max degree of parallelism", "0", "engine-default", dtype="integer"),
+                                        P("max server memory (mb)", "{DBInstanceClassMemory/1048576}", "engine-default", dtype="integer")],
+    ("cluster", "aurora-mysql8.0"): [P("require_secure_transport", "OFF", "engine-default"), P("tls_version", "TLSv1.2,TLSv1.3", "engine-default"),
+                                     P("binlog_format", "OFF", "engine-default", "static"), P("server_audit_logging", "0", "engine-default")],
+    ("instance", "aurora-mysql8.0"): [P("innodb_buffer_pool_size", "{DBInstanceClassMemory*3/4}", "engine-default", "static", "integer"),
+                                      P("max_connections", "GREATEST({log(DBInstanceClassMemory/805306368)*45},{log(DBInstanceClassMemory/8187281408)*1000})", "engine-default", dtype="integer"),
+                                      P("slow_query_log", "0", "engine-default"), P("long_query_time", "10", "engine-default")],
+    ("instance", "mysql8.0"): [P("require_secure_transport", "0", "engine-default"), P("innodb_buffer_pool_size", "{DBInstanceClassMemory*3/4}", "engine-default", "static", "integer"),
+                               P("slow_query_log", "0", "engine-default")]}
+GROUP_VALUES = {   # (group, source) -> parameters
+    ("pay-apg16-cluster", "user"): [P("rds.force_ssl", "0", "user", dtype="boolean"), P("log_connections", "0", "user", dtype="boolean"),
+                                    P("shared_preload_libraries", "pg_stat_statements,pgaudit", "user", "static"), P("pgaudit.log", "ddl,role", "user")],
+    ("pay-apg16-cluster", "system"): [P("apg_plan_mgmt.capture_plan_baselines", "automatic", "system")],
+    ("pay-apg16-instance", "user"): [P("log_connections", "1", "user", dtype="boolean"), P("work_mem", "65536", "user", dtype="integer")],
+    ("aurora-mysql-custom", "user"): [P("require_secure_transport", "OFF", "user"), P("binlog_format", "ROW", "user", "static"), P("general_log", "0", "user")],
+    ("orders-mysql80", "user"): [P("slow_query_log", "1", "user"), P("long_query_time", "2", "user")],
+    ("ledger-pg16", "user"): [P("rds.force_ssl", "1", "user"), P("log_connections", "1", "user"), P("work_mem", "16384", "user", dtype="integer")],
+    ("crm-pg16", "user"): [P("password_encryption", "md5", "user"), P("work_mem", "8192", "user", dtype="integer"), P("rds.force_ssl", "1", "user"),
+                           P("log_connections", "1", "user"), P("unlisted_param", "y", "user")],
+    ("default.sqlserver-se", "system"): [P("rds.tls10", "enabled", "system", "static"), P("rds.tls11", "enabled", "system", "static")],
+    ("default.aurora-postgresql", "system"): [P("work_mem", "4096", "system", dtype="integer")]}
+if OP in ("describe-db-parameter-groups", "describe-db-cluster-parameter-groups"):
+    if ACCT == "222222222222" and OP == "describe-db-parameter-groups" and os.environ.get("MOCK_PG_LIST_DENY") == "1":
+        fail("AccessDenied", "DescribeDBParameterGroups", "not authorized")
+    cl = OP == "describe-db-cluster-parameter-groups"
+    k = "DBClusterParameterGroupName" if cl else "DBParameterGroupName"
+    out({"DBClusterParameterGroups" if cl else "DBParameterGroups": [{k: n, "DBParameterGroupFamily": f, "Description": "mock"} for n, f in sorted(FAMILY.items())
+                                                                    if (n in CLUSTER_GROUPS) == cl]})
+if OP in ("describe-db-parameters", "describe-db-cluster-parameters"):
+    n = o.get("--db-cluster-parameter-group-name") or o.get("--db-parameter-group-name")
+    if n == "qa-mysql80":
+        fail("AccessDenied", "DescribeDBParameters", "User: arn:aws:sts::%s:assumed-role/DBAReportsReadOnly/dba is not authorized to perform: rds:DescribeDBParameters on resource: %s" % (ACCT, n))
+    if n not in FAMILY:
+        fail("DBParameterGroupNotFound", "DescribeDBParameters", "DBParameterGroup not found: %s" % n)
+    out({"Parameters": GROUP_VALUES.get((n, o.get("--source", "")), [])})
+if OP in ("describe-engine-default-parameters", "describe-engine-default-cluster-parameters"):
+    fam = o.get("--db-parameter-group-family", "")
+    kind = "cluster" if "cluster" in OP else "instance"
+    out({"EngineDefaults": {"DBParameterGroupFamily": fam, "Parameters": DEFAULTS.get((kind, fam), [])}})
 
 if OP == "describe-db-instances":
     out({"DBInstances": INS})

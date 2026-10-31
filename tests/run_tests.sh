@@ -14,7 +14,7 @@ KEEP=0; [[ "${1:-}" == -k ]] && KEEP=1
 PASS=0; FAIL=0
 export MOCK_LOG="$OUT/aws_calls.jsonl"
 export PATH="$HERE/mock:$PATH"
-unset AWS_REGION AWS_DEFAULT_REGION AWS_PROFILE MOCK_DEFAULT_REGION MOCK_SCENARIO
+unset AWS_REGION AWS_DEFAULT_REGION AWS_PROFILE MOCK_DEFAULT_REGION MOCK_SCENARIO MOCK_AUDIT MOCK_PG_LIST_DENY
 export AWS_ACCESS_KEY_ID=fake-test-key-id AWS_SECRET_ACCESS_KEY=fake-test-secret AWS_SESSION_TOKEN=fake \
        AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
        AWS_ENDPOINT_URL=http://127.0.0.1:9 TMPDIR="$OUT" TZ=UTC
@@ -55,7 +55,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.0\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.1\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -227,7 +227,7 @@ chk "data file written next to the HTML" test -s "$SD"
 chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
 chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data*' 2>/dev/null)"
 dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
-dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.0.0" and .merged == false'
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.1.0" and .merged == false'
 dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
 dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
 dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
@@ -314,10 +314,10 @@ t mnone 1 fleet --merge;              has mnone err "--merge"
 
 echo "== insights"
 export MOCK_AUDIT=1
-t aud 0 fleet "${FLEET[@]}" -F html,csv --save-data
+t aud 0 fleet "${FLEET[@]}" -F html,csv --save-data --with-parameters
 AUD="$(find "$OUT/aud" -name '*.html' | head -1)"; AUDF="$(find "$OUT/aud" -name '*_insights_findings.csv' | head -1)"
 chk "file names carry the account tag" test -n "$(find "$OUT/aud" -name 'rds_inventory_explorer_111111111111_222222222222_20261017_063000*' | head -1)"
-chk "-F html,csv writes html + 3 CSVs + data" test "$(find "$OUT/aud" -type f | wc -l)" -eq 5
+chk "-F html,csv --with-parameters writes html + 4 CSVs + data" test "$(find "$OUT/aud" -type f | wc -l)" -eq 6
 read -ra CIDS <<<"$(sed -n 's/^readonly CHECK_IDS="\(.*\)"/\1/p' "$SCRIPT")"
 for c in "${CIDS[@]}"; do jqt aud "[.insights.findings[] | select(.check == \"$c\")] | length > 0"; done
 jqt aud '.insights.findings | all(.unit_id != null and (.account | test("^[0-9]{12}$")))'
@@ -342,7 +342,8 @@ t confbad 1 fleet -c "$OUT/bad.conf"; chk "config file is never executed" test !
 chk "script CSVs: no cell starts with = + - @" bash -c "! grep -hE '(^|,)\"?[=+@-][A-Za-z(]' '$OUT/aud/'*.csv"
 # hostile merge input
 AD="$(find "$OUT/aud" -name '*_data.json' | head -1)"
-jq '.source.regions[0].instances[0].DBInstanceIdentifier = "x<img src=x onerror=window.__pwned=1></script><script>window.__pwned=1</script>\u2028=cmd|x"' "$AD" >"$OUT/xss_data.json"
+jq '.source.regions[0].instances[0].DBInstanceIdentifier = "x<img src=x onerror=window.__pwned=1></script><script>window.__pwned=1</script>\u2028=cmd|x"
+    | (.source.regions[] | select(.params != null) | .params.groups[] | select(.name == "crm-pg16") | .user[0].ParameterValue) = "<img src=x onerror=window.__pwned=1></script>=cmd|x"' "$AD" >"$OUT/xss_data.json"
 t xssm 0 fleet --merge "$OUT/xss_data.json"
 XH="$(find "$OUT/xssm" -name '*.html' | head -1)"
 chk "tampered merge: no raw </script> or <img in page" bash -c "[ \"\$(grep -o '</script>' '$XH' | wc -l)\" -eq 3 ] && ! grep -q '<img' '$XH'"
@@ -352,12 +353,77 @@ jq '.accounts[0].account = "../../etc"' "$AD" >"$OUT/badacct.json"; t mbadacct 3
 jq '.source.regions[0].region = "../x"' "$AD" >"$OUT/badreg.json"; t mbadreg 3 fleet --merge "$OUT/badreg.json"; has mbadreg err "unexpected shape"
 jq '.source.regions[0].instances = "nope"' "$AD" >"$OUT/badlist.json"; t mbadlist 3 fleet --merge "$OUT/badlist.json"; has mbadlist err "non-list"
 jq '.errors = {}' "$AD" >"$OUT/baderr.json"; t mbaderr 3 fleet --merge "$OUT/baderr.json"; has mbaderr err "errors list"
+echo "== parameters (--with-parameters)"
+PC="$(calls)"
+chk "parameters: only user + system per group, never a full page-through" bash -c "! grep -E 'describe-db(-cluster)?-parameters ' <<<\"\$1\" | grep -vqE -- '--source (user|system)\$'" _ "$PC"
+chk "parameters: engine defaults once per family per account+region" bash -c "[ \"\$(grep -E 'describe-engine-default' <<<\"\$1\" | sort | uniq -d | wc -l)\" -eq 0 ] && grep -qE 'describe-engine-default-cluster-parameters .*--db-parameter-group-family aurora-postgresql16' <<<\"\$1\"" _ "$PC"
+chk "parameters: each in-use group read once per source" bash -c "[ \"\$(grep -E 'describe-db(-cluster)?-parameters ' <<<\"\$1\" | sort | uniq -d | wc -l)\" -eq 0 ]" _ "$PC"
+has aud err "parameters: [0-9]+ group\(s\), [0-9]+ engine-default set\(s\) in [0-9]+\.[0-9]{3}s"
+has aud err "parameter step [0-9.]+s"
+jqt aud '.parameters.collected and .parameters.elapsed_ms >= 0 and .meta.parameters.requested'
+jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values.log_connections | .v, .from] == ["1", "instance"]'
+jqt aud '[.parameters.rows[] | select(.name == "pay-aurora-use1") | .values.log_connections | .v, .from] == ["0", "cluster"]'
+jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values["rds.force_ssl"] | .v, .from, .flag] == ["0", "cluster", "SSL not forced"]'
+jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values["apg_plan_mgmt.capture_plan_baselines"] | .v, .src] == ["automatic", "system"]'
+jqt aud '[.parameters.rows[] | select(.name == "hr-sqlserver") | .values["rds.tls10"] | .v, .src, .flag] == ["enabled", "system", "TLS 1.0 enabled"]'
+jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .values.shared_buffers | .v, .approx] == ["{DBInstanceClassMemory/32768}", 2097152]'
+jqt aud '[.parameters.rows[] | select(.name == "orders-1") | .values.innodb_buffer_pool_size.approx] | .[0] > 0'
+jqt aud '[.parameters.rows[] | .values | keys[]] | index("unlisted_param") == null'
+jqt aud '[.parameters.rows[] | select(.name == "pay-use1-2") | .apply_status] == ["pending-reboot"]'
+jqt aud '[.parameters.rows[] | select(.name == "qa-mysql") | (.group_error | test("AccessDenied")), (.values == {})] == [true, true]'
+jqt aud '[.parameters.groups[] | select(.name == "qa-mysql80") | .error | test("AccessDenied")] == [true]'
+jqt aud '[.errors[] | select(.call | test("describe-db-parameters"))] | length == 1'
+jqt aud '[.parameters.rows | map(.name) | index("pay-aurora-use1"), index("pay-use1-1")] | .[0] + 1 == .[1]'
+jqt aud '[.parameters.rows[] | select(.name == "pay-use1-1") | .global, .cluster_name] == ["pay-global", "pay-aurora-use1"]'
+jqt aud '[.parameters.groups[] | select(.name == "pay-apg16-instance") | .used_by[].name] == ["pay-use1-1", "pay-use1-2"]'
+jqt aud '[.parameters.groups[] | select(.is_default)] | length > 0 and all(.name | startswith("default."))'
+jqt aud '[.parameters.drift[] | select(.section == "postgres" and .param == "work_mem") | .values | length] == [3]'
+jqt aud '[.insights.findings[] | select(.check == "default_param_group") | .sev] | unique == ["Medium"]'
+jqt aud '[.insights.findings[] | select(.check == "conn_logging_off") | .res_name] | index("pay-use1-1") == null'
+PCSV="$(find "$OUT/aud" -name '*_parameters.csv' | head -1)"
+chk "parameters CSV header" bash -c "head -1 '$PCSV' | tr -d '\r\357\273\277' | grep -qx 'Account,Region,Resource,Resource type,Cluster,Engine,Parameter,Value,Approx. computed,Source,From,Parameter group,Non-default,Flag,Apply type,Apply status'"
+chk "parameters CSV rows == values" test "$(($(wc -l <"$PCSV") - 1))" -eq "$(jq '[.parameters.rows[].values | length] | add' "$OUT/aud.json")"
+t noparams 0 fleet "${FLEET[@]}" -F html,csv
+chk "no --with-parameters: no parameter call and no parameters CSV" bash -c "! jq -r 'join(\" \")' '$MOCK_LOG' | tail -n 400 | grep -q 'parameters\b' ; test -z \"\$(find '$OUT/noparams' -name '*_parameters.csv')\""
+jqt noparams '(.parameters.collected | not) and ([.insights.checks[] | select(.not_run) | .id] | sort == ["conn_logging_off", "md5_password", "param_pending_reboot", "ssl_not_forced", "tls_old_enabled"])'
+jqt noparams '[.insights.findings[] | select(.check == "default_param_group")] | length > 0'
+t pdry 0 fleet -P prod -r us-east-1 --with-parameters --dry-run
+has pdry out "describe-db-parameters --db-parameter-group-name .{0,2}<group.{0,2} --source user"
+has pdry out "describe-engine-default-cluster-parameters --db-parameter-group-family .{0,2}<family"
+printf 'profile = prod\nregion = us-east-1\nwith-parameters = true\n' >"$OUT/p.conf"
+t pconf 0 fleet -c "$OUT/p.conf"; jqt pconf '.parameters.collected'
+t pskip 0 fleet "${FLEET[@]}" --with-parameters --skip-checks default_param_group,ssl_not_forced
+jqt pskip '[.insights.findings[] | select(.check == "default_param_group" or .check == "ssl_not_forced")] == []'
+# merge: parameter data travels with --save-data; a file without it still merges; groups deduped
+PSD="$(find "$OUT/aud" -name '*_data.json' | head -1)"
+jq '.source.regions |= map(select(.account == "111111111111"))' "$PSD" >"$OUT/p_prod.json"
+jq '.source.regions |= map(select(.account == "222222222222") | del(.params)) | .accounts |= map(select(.account == "222222222222")) | .script_version = "2.0.0"' "$PSD" >"$OUT/p_np.json"   # = a v2.0.0 file
+jq '.accounts |= map(select(.account == "111111111111"))' "$OUT/p_prod.json" >"$OUT/p_prod1.json"
+t pmerge 0 fleet --merge "$OUT/p_prod1.json" "$OUT/p_np.json" -F html,csv
+jqt pmerge '.parameters.collected and .parameters.not_collected == ["222222222222"]'
+jqt pmerge '[.parameters.rows[] | select(.name == "pay-use1-1") | .values.log_connections.from] == ["instance"]'
+jq '.source.regions += [.source.regions[] | select(.params != null)][0:1]' "$PSD" >"$OUT/p_dup.json"
+t pdup 0 fleet --merge "$PSD" -F html; jqt pdup '.parameters.groups | (map(.gid) | unique | length) == length'
+t pdup2 0 fleet --merge "$OUT/p_dup.json"; jqt pdup2 '.parameters.groups | (map(.gid) | unique | length) == length'
+jq '(.source.regions[] | select(.params != null) | .params.groups[0].name) = "../x y"' "$PSD" >"$OUT/p_badname.json"
+t pbadname 3 fleet --merge "$OUT/p_badname.json"; has pbadname err "parameter data with an unexpected shape"
+jq '(.source.regions[] | select(.params != null) | .params.groups[0].kind) = "evil"' "$PSD" >"$OUT/p_badkind.json"
+t pbadkind 3 fleet --merge "$OUT/p_badkind.json"
+jq '(.source.regions[] | select(.params != null) | .params.defaults[0].parameters[0].ParameterValue) = {"x": 1}' "$PSD" >"$OUT/p_badval.json"
+t pbadval 3 fleet --merge "$OUT/p_badval.json"
+jq '.accounts[0].account = "12345"' "$PSD" >"$OUT/p_badacct.json"; t pbadacct 3 fleet --merge "$OUT/p_badacct.json"
 unset MOCK_AUDIT
 if command -v node >/dev/null 2>&1 && node -e "require('puppeteer-core')" 2>/dev/null && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]]; then
     res="$(ALL_CHECKS=1 node "$HERE/insights_check.js" "$AUD" "$OUT/aud" ${SHOTS_INS:+"$SHOTS_INS"} 2>&1)"; rc=$?
     (( rc == 0 )) && ok "insights browser: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "insights browser: ${res:0:800}"
     res="$(XSS=1 node "$HERE/insights_check.js" "$XH" 2>&1)"; rc=$?
     (( rc == 0 )) && ok "tampered-merge XSS page: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "xss browser: ${res:0:800}"
+    res="$(node "$HERE/params_check.js" "$AUD" "$OUT/aud" ${SHOTS_PAR:+"$SHOTS_PAR"} 2>&1)"; rc=$?
+    (( rc == 0 )) && ok "parameters browser: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "parameters browser: ${res:0:1200}"
+    res="$(XSS=1 node "$HERE/params_check.js" "$XH" 2>&1)"; rc=$?
+    (( rc == 0 )) && ok "parameters tab, tampered merge: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "parameters xss: ${res:0:800}"
+    res="$(NOTCOL=1 node "$HERE/params_check.js" "$(find "$OUT/pmerge" -name '*.html' | head -1)" 2>&1)"; rc=$?
+    (( rc == 0 )) && ok "parameters tab, merge with a file without parameters: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "parameters notcollected: ${res:0:800}"
 else echo "  skip insights browser check"; fi
 
 echo "== browser (headless Chrome)"

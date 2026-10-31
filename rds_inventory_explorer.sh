@@ -15,10 +15,10 @@ set -Eeuo pipefail
 umask 077 2>/dev/null || true
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 readonly DATA_SCHEMA="rds-inventory-explorer/data" DATA_SCHEMA_VERSION=1
 # Insights audit checks (lib/insights.jq); --skip-checks takes these ids
-readonly CHECK_IDS="public_access storage_not_encrypted deletion_protection_off copy_tags_off single_az backup_retention_low iam_auth_off ca_expiring auto_minor_off pi_off em_off no_log_exports default_port default_master_user old_generation gp2_storage stopped"
+readonly CHECK_IDS="public_access storage_not_encrypted deletion_protection_off copy_tags_off single_az backup_retention_low iam_auth_off ca_expiring auto_minor_off pi_off em_off no_log_exports default_port default_master_user old_generation gp2_storage stopped default_param_group ssl_not_forced tls_old_enabled conn_logging_off md5_password param_pending_reboot"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB_DIR="${RDS_EXPLORER_LIB:-$SCRIPT_DIR/lib}"
@@ -27,6 +27,8 @@ TEMPLATE="$LIB_DIR/explorer_template.html"
 CSV_LIB="$LIB_DIR/csv.jq"
 MERGE_LIB="$LIB_DIR/merge.jq"
 INSIGHTS_LIB="$LIB_DIR/insights.jq"
+PARAMS_LIB="$LIB_DIR/parameters.jq"
+PARAMS_LIST="$LIB_DIR/parameters.list"
 
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
     echo "$SCRIPT_NAME: bash 4.4+ required (found $BASH_VERSION)" >&2; exit 2
@@ -56,6 +58,8 @@ JQ_CRLF=0
 STAMP=""
 VERBOSE=0
 SKIP_CHECKS=()
+WITH_PARAMS=0
+PARAM_MS=0
 FORMATS=()
 FILE_TAG=""
 CONFIG_FILE=""
@@ -89,6 +93,9 @@ Scope:
       --no-discover         With -A: no probe, read every enabled region in full
       --probe-parallel N    Regions probed at the same time (default: 8, 1-32)
       --include-docdb       Also list DocumentDB and Neptune clusters (default: skipped)
+      --with-parameters     Also read the parameter groups in use (Parameters tab): per group only the Source user and
+                            system values, engine defaults once per family; names in lib/parameters.list only.
+                            Read-only; a group that fails (e.g. AccessDenied) is shown, never fatal. Elapsed time logged.
 
 Output:
   -o, --output-dir DIR      Directory for <prefix>_<account>_YYYYmmdd_HHMMSS.html (default: current directory)
@@ -99,7 +106,8 @@ Output:
   -F, --format LIST         html (default), csv or html,csv. csv writes next to the HTML:
                             <prefix>_<account>_<ts>_inventory.csv (one row per resource, tags as columns),
                             <prefix>_<account>_<ts>_pending.csv (one row per pending maintenance action) and
-                            <prefix>_<account>_<ts>_insights_findings.csv (one row per resource per failed check)
+                            <prefix>_<account>_<ts>_insights_findings.csv (one row per resource per failed check) and,
+                            with parameter data, <prefix>_<account>_<ts>_parameters.csv (one row per resource per parameter)
       --csv                 Same as -F html,csv
       --skip-checks LIST    Insights audit checks to switch off, comma-separated ids:
                             ${CHECK_IDS// /, }
@@ -159,6 +167,7 @@ parse_args() {
             --prefix)           need_arg "$opt" $#; PREFIX="$2"; shift 2 ;;
             --tz)               need_arg "$opt" $#; DISPLAY_TZ="$2"; TZ_SET=1; shift 2 ;;
             --save-data)        SAVE_DATA=1; shift ;;
+            --with-parameters)  WITH_PARAMS=1; shift ;;
             --merge)            MERGE=1; shift
                                 while (( $# )) && [[ "$1" != -?* ]]; do MERGE_ARGS+=("$1"); shift; done ;;
             --aws-timeout)      need_arg "$opt" $#; AWS_TIMEOUT="$2"; shift 2 ;;
@@ -200,6 +209,7 @@ load_config() {   # load_config <args...>: finds -c / --config, reads key=value 
             output-dir) OUTPUT_DIR="$v" ;; prefix) PREFIX="$v" ;; tz) DISPLAY_TZ="$v"; TZ_SET=1 ;;
             format) add_list FORMATS "$v" ;; csv) is_true "$v" && FORMATS+=(html csv) ;;
             skip-checks) add_list SKIP_CHECKS "$v" ;; save-data) is_true "$v" && SAVE_DATA=1 ;;
+            with-parameters) is_true "$v" && WITH_PARAMS=1 ;;
             aws-timeout) AWS_TIMEOUT="$v" ;; max-attempts) MAX_ATTEMPTS="$v" ;;
             *) die 1 "$f line $n: unknown key '$k'" ;;
         esac
@@ -253,6 +263,7 @@ precheck_jq() {
     [[ -r "$CSV_LIB" ]] || die 2 "CSV library missing: $CSV_LIB"
     [[ -r "$INSIGHTS_LIB" ]] || die 2 "Insights library missing: $INSIGHTS_LIB"
     [[ -r "$MERGE_LIB" ]] || die 2 "Merge library missing: $MERGE_LIB"
+    [[ -r "$PARAMS_LIB" ]] || die 2 "Parameters library missing: $PARAMS_LIB"
     # a native Windows jq.exe turns every LF it prints into CRLF: then the CSV is built with LF (jq adds the CR)
     if [[ "$(jq -jn '"x\n"' | wc -c | tr -d ' \r')" != 2 ]]; then CSV_EOL=$'\n' JQ_CRLF=1; log_debug "jq writes CRLF line ends; adapting"; fi
 }
@@ -276,7 +287,12 @@ aws_base() {   # aws_base <profile> <region>
 read_only_guard() {   # read_only_guard <service> <operation>
     case "$1:$2" in
         cloudwatch:*|logs:*|secretsmanager:*|kms:*) die 4 "internal: refusing call to $1 (not part of this report)" ;;
-        sts:get-caller-identity|ec2:describe-regions|rds:describe-*) return 0 ;;
+        sts:get-caller-identity|ec2:describe-regions) return 0 ;;
+        rds:describe-db-clusters|rds:describe-db-instances|rds:describe-global-clusters|rds:describe-db-cluster-endpoints) return 0 ;;
+        rds:describe-pending-maintenance-actions|rds:describe-certificates) return 0 ;;
+        # --with-parameters (read-only): group lists, a group's user / system parameters, engine defaults per family
+        rds:describe-db-parameter-groups|rds:describe-db-cluster-parameter-groups|rds:describe-db-parameters|rds:describe-db-cluster-parameters) return 0 ;;
+        rds:describe-engine-default-parameters|rds:describe-engine-default-cluster-parameters) return 0 ;;
         *) die 4 "internal: refusing non-read-only call aws $1 $2" ;;
     esac
 }
@@ -337,12 +353,93 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
     else printf '[]' >"$d/endpoints.json"; fi
     soft "$d/pma.json" PendingMaintenanceActions "$account" "$profile" "$region" describe-pending-maintenance-actions || true
     soft "$d/certs.json" Certificates "$account" "$profile" "$region" describe-certificates || true
+    printf 'null' >"$d/params.json"
+    if (( WITH_PARAMS )); then collect_params "$profile" "$account" "$region" "$d"; fi
     jq -cn --arg a "$account" --arg p "${profile:-default}" --arg r "$region" \
         --slurpfile clusters "$d/clusters.json" --slurpfile instances "$d/instances.json" --slurpfile globals "$d/globals.json" \
         --slurpfile endpoints "$d/endpoints.json" --slurpfile pma "$d/pma.json" --slurpfile certs "$d/certs.json" \
+        --slurpfile params "$d/params.json" \
         '{account: $a, profile: $p, region: $r, clusters: $clusters[0], instances: $instances[0], globals: $globals[0],
-          endpoints: $endpoints[0], pma: $pma[0], certs: $certs[0]}' >"$d/region.json" || die 4 "Assembling region data failed"
+          endpoints: $endpoints[0], pma: $pma[0], certs: $certs[0]} + (if $params[0] == null then {} else {params: $params[0]} end)' >"$d/region.json" || die 4 "Assembling region data failed"
     log_info "[${profile:-default}/$region] $(jq length "$d/clusters.json") cluster(s), $(jq length "$d/instances.json") instance(s), $(jq length "$d/globals.json") global cluster(s)"
+}
+
+# --with-parameters: only the parameters in lib/parameters.list, with as few calls as possible.
+# Per in-use group: describe-db(-cluster)-parameters --source user and --source system (the values set on the group).
+# Engine defaults: once per family and group kind per account + region (describe-engine-default(-cluster)-parameters),
+# cached and re-used by every group of that family. Effective value = user > system > engine default.
+# An error (AccessDenied ...) is recorded on that group and in the error list; never fatal.
+# shellcheck disable=SC2016  # a jq program, single-quoted on purpose
+PARAM_FILTER='def section: if test("^aurora-postgresql") then "aurora-postgresql" elif test("^aurora-mysql|^aurora[0-9.]*$") then "aurora-mysql"
+        elif test("^postgres") then "postgres" elif test("^(mysql|mariadb)") then "mysql" elif test("^sqlserver") then "sqlserver"
+        elif test("^(custom-)?oracle") then "oracle" else null end;
+    ($list[0][$fam | section] // []) as $keep
+    | [.[] | select(.ParameterName as $n | $keep | index([$n])) | {Name: .ParameterName, ParameterValue, Source, ApplyType, IsModifiable, DataType,
+        AllowedValues: (if (.AllowedValues | type) == "string" and (.AllowedValues | length) > 200 then .AllowedValues[0:200] + "..." else .AllowedValues end)}]'
+params_list_json() {   # lib/parameters.list -> {"section": ["name", ...]}
+    local line sec="" ; {
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"; line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            if [[ "$line" =~ ^\[([a-z0-9-]+)\]$ ]]; then sec="${BASH_REMATCH[1]}"; continue; fi
+            [[ -n "$sec" ]] && printf '%s\t%s\n' "$sec" "$line"
+        done <"$PARAMS_LIST"; } | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")) | group_by(.[0]) | map({key: .[0][0], value: map(.[1])}) | from_entries'
+}
+param_fetch() {   # param_fetch <out> <profile> <region> <op> <args...>: Parameters (filtered for $fam) -> <out>, 1 on error
+    local out="$1" profile="$2" region="$3"; shift 3
+    if aws_call "$out.raw" "$profile" "$region" rds "$@"; then
+        jq -c --arg fam "$PFAM" --slurpfile list "$WORK/params_list.json" '(.Parameters // .EngineDefaults.Parameters // []) | '"$PARAM_FILTER" "$out.raw" >"$out"
+        return 0
+    fi
+    printf '[]' >"$out"; return 1
+}
+collect_params() {   # collect_params <profile> <account> <region> <dir>  -> <dir>/params.json
+    local profile="$1" account="$2" region="$3" d="$4/params" t0 kind name fam key n=0 err gf
+    local -a names=()
+    local -A dflt=()
+    t0="$(date +%s%N 2>/dev/null)"; [[ "$t0" =~ ^[0-9]+$ ]] || t0="$(date +%s)000000000"
+    mkdir -p "$d"; : >"$d/groups.jsonl"; : >"$d/defaults.jsonl"
+    [[ -s "$WORK/params_list.json" ]] || params_list_json >"$WORK/params_list.json" || die 4 "Reading $PARAMS_LIST failed"
+    for kind in cluster instance; do
+        if [[ "$kind" == cluster ]]; then
+            mapfile -t names < <(jq -r '.[] | select((.Engine // "") | test("^(docdb|neptune)") | not) | .DBClusterParameterGroup // empty' "$4/clusters.json" | sort -u)
+            gf=describe-db-cluster-parameter-groups
+        else
+            mapfile -t names < <(jq -r '.[] | select((.Engine // "") | test("^(docdb|neptune)") | not) | .DBParameterGroups[]?.DBParameterGroupName // empty' "$4/instances.json" | sort -u)
+            gf=describe-db-parameter-groups
+        fi
+        (( ${#names[@]} )) || continue
+        # one list call per kind gives every group's family
+        if aws_call "$d/$kind.list" "$profile" "$region" rds "$gf"; then
+            jq -c '[(.DBClusterParameterGroups // .DBParameterGroups // [])[] | {key: (.DBClusterParameterGroupName // .DBParameterGroupName), value: .DBParameterGroupFamily}] | from_entries' "$d/$kind.list" >"$d/$kind.fam"
+        else add_error "$account" "$profile" "$region" "rds $gf" "$LAST_ERR"; printf '{}' >"$d/$kind.fam"; fi
+        for name in "${names[@]}"; do
+            n=$(( n + 1 )); err=""
+            fam="$(jq -r --arg n "$name" '.[$n] // ""' "$d/$kind.fam" | tr -d '\r')"
+            PFAM="$fam"
+            local op=describe-db-parameters opt=--db-parameter-group-name dop=describe-engine-default-parameters
+            [[ "$kind" == cluster ]] && op=describe-db-cluster-parameters opt=--db-cluster-parameter-group-name dop=describe-engine-default-cluster-parameters
+            param_fetch "$d/g$n.user" "$profile" "$region" "$op" "$opt" "$name" --source user || err="$LAST_ERR"
+            if [[ -z "$err" ]]; then param_fetch "$d/g$n.system" "$profile" "$region" "$op" "$opt" "$name" --source system || err="$LAST_ERR"
+            else printf '[]' >"$d/g$n.system"; fi
+            [[ -n "$err" ]] && add_error "$account" "$profile" "$region" "rds $op $name" "$err"
+            key="$kind|$fam"
+            if [[ -n "$fam" && -z "${dflt[$key]:-}" ]]; then   # engine defaults: once per family + kind (cached)
+                dflt[$key]=1
+                local de=""
+                param_fetch "$d/d$n.json" "$profile" "$region" "$dop" --db-parameter-group-family "$fam" || { de="$LAST_ERR"; add_error "$account" "$profile" "$region" "rds $dop $fam" "$de"; }
+                jq -cn --arg k "$kind" --arg f "$fam" --arg e "$de" --slurpfile p "$d/d$n.json" \
+                    '{kind: $k, family: $f, parameters: $p[0], error: (if $e == "" then null else $e end)}' >>"$d/defaults.jsonl"
+            fi
+            jq -cn --arg k "$kind" --arg n "$name" --arg f "$fam" --arg e "$err" --slurpfile u "$d/g$n.user" --slurpfile s "$d/g$n.system" \
+                '{kind: $k, name: $n, family: (if $f == "" then null else $f end), user: $u[0], system: $s[0], error: (if $e == "" then null else $e end)}' >>"$d/groups.jsonl"
+        done
+    done
+    local t1 ms; t1="$(date +%s%N 2>/dev/null)"; [[ "$t1" =~ ^[0-9]+$ ]] || t1="$(date +%s)000000000"
+    ms=$(( (t1 - t0) / 1000000 )); PARAM_MS=$(( PARAM_MS + ms ))
+    jq -cn --slurpfile g "$d/groups.jsonl" --slurpfile df "$d/defaults.jsonl" --slurpfile l "$WORK/params_list.json" --argjson ms "$ms" \
+        '{collected: true, list: $l[0], groups: $g, defaults: $df, elapsed_ms: $ms}' >"$4/params.json" || die 4 "Assembling parameter data failed"
+    log_info "[${profile:-default}/$region] parameters: $n group(s), $(wc -l <"$d/defaults.jsonl" | tr -d ' ') engine-default set(s) in $(( ms / 1000 )).$(printf '%03d' $(( ms % 1000 )))s"
 }
 
 # Region discovery (-A): two read-only, one-page calls per region tell whether it has any DB instance / cluster.
@@ -470,10 +567,11 @@ build_model() {
         --arg tz "$DISPLAY_TZ" --arg tzabbr "$(tz_date '+%Z')" --argjson tzoff "$(tz_offset_sec)" \
         --slurpfile accounts "$WORK/accounts.jsonl" --argjson profiles "${#PROFILES[@]}" --arg rmode "$mode" \
         --argjson docdb "$INCLUDE_DOCDB" --argjson calls "$AWS_CALLS" --argjson fails "$AWS_FAILS" \
-        --arg stamp "$STAMP" \
+        --arg stamp "$STAMP" --argjson wp "$WITH_PARAMS" --argjson pms "$PARAM_MS" \
         '{script: $script, version: $version, now: $now, file_stamp: $stamp, generated_utc: $gu, generated_local: $gl, tz: $tz, tz_abbr: $tzabbr, tz_offset: $tzoff,
           accounts: $accounts, profiles_requested: $profiles, region_mode: $rmode, include_docdb: ($docdb == 1),
-          aws_calls: $calls, aws_failures: $fails, cloudwatch_calls: 0}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
+          aws_calls: $calls, aws_failures: $fails, cloudwatch_calls: 0,
+          parameters: {requested: ($wp == 1), elapsed_ms: (if $wp == 1 then $pms else null end)}}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
     jq -n --slurpfile meta "$WORK/meta.json" --slurpfile regions "$WORK/regions.json" --slurpfile errors "$WORK/all_errors.json" \
         '{meta: $meta[0], regions: $regions[0], errors: $errors[0]}' >"$WORK/raw.json" || die 4 "Assembling the report failed"
     jq -c -f "$LIB" "$WORK/raw.json" >"$WORK/model.json" || die 4 "Building the data model failed"
@@ -482,7 +580,8 @@ build_model() {
 
 skip_json() { if (( ${#SKIP_CHECKS[@]} )); then printf '%s\n' "${SKIP_CHECKS[@]}" | jq -R . | jq -cs . | tr -d '\r'; else printf '[]'; fi; }
 add_insights() {   # model.json (explorer.jq) -> + Insights facets / audit findings (insights.jq) + file tag
-    jq -c --argjson skip "$(skip_json)" -f "$INSIGHTS_LIB" "$WORK/model.json" >"$WORK/model_i.json" || die 4 "Building the Insights data failed"
+    jq -c --slurpfile raw "$WORK/raw.json" -f "$PARAMS_LIB" "$WORK/model.json" >"$WORK/model_p.json" || die 4 "Building the parameter data failed"
+    jq -c --argjson skip "$(skip_json)" -f "$INSIGHTS_LIB" "$WORK/model_p.json" >"$WORK/model_i.json" || die 4 "Building the Insights data failed"
     # accounts in file names: up to 3 joined with _, else merged_<n>_accounts
     FILE_TAG="$(jq -r '[.meta.accounts[]?.account | select(test("^[0-9]{12}$"))] | unique
         | if length == 0 then "noaccount" elif length > 3 then "merged_\(length)_accounts" else join("_") end' "$WORK/model_i.json" | tr -d '\r')"
@@ -539,6 +638,7 @@ dry_run_plan() {
     elif (( ALL_REGIONS )); then echo "  regions  : all enabled per account; every region read in full (--no-discover)"
     else echo "  regions  : ${REGIONS[*]:-profile default}"; fi
     echo "  docdb    : $( (( INCLUDE_DOCDB )) && echo included || echo skipped)"
+    echo "  params   : $( (( WITH_PARAMS )) && echo "collected (lib/parameters.list names only)" || echo "not collected (add --with-parameters)")"
     echo "  output   : ${OUTPUT_DIR%/}/${PREFIX}_<account>_YYYYmmdd_HHMMSS.html"
     for p in "${PROFILES[@]}"; do
         r="${REGIONS[0]:-<region>}"
@@ -558,6 +658,16 @@ dry_run_plan() {
             for c in describe-db-clusters describe-db-instances describe-global-clusters describe-db-cluster-endpoints describe-pending-maintenance-actions describe-certificates; do
                 printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds "$c")"
             done
+            if (( WITH_PARAMS )); then
+                echo "  parameters (--with-parameters): each in-use group once, only Source user + system; engine defaults once per family:"
+                printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-cluster-parameter-groups)" "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-parameter-groups)" \
+                    "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-cluster-parameters --db-cluster-parameter-group-name '<group>' --source user)" \
+                    "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-cluster-parameters --db-cluster-parameter-group-name '<group>' --source system)" \
+                    "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-parameters --db-parameter-group-name '<group>' --source user)" \
+                    "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-parameters --db-parameter-group-name '<group>' --source system)" \
+                    "$(printf '%q ' "${AWS_CMD[@]}" rds describe-engine-default-cluster-parameters --db-parameter-group-family '<family>')" \
+                    "$(printf '%q ' "${AWS_CMD[@]}" rds describe-engine-default-parameters --db-parameter-group-family '<family>')"
+            fi
         done
     done
 }
@@ -579,7 +689,10 @@ on_signal() { log_error "Interrupted"; exit 130; }
 
 write_outputs() {
     if (( WRITE_HTML )); then write_html; fi
-    if (( WRITE_CSV )); then write_csv inventory; write_csv pending; write_csv insights_findings; fi
+    if (( WRITE_CSV )); then
+        write_csv inventory; write_csv pending; write_csv insights_findings
+        if [[ "$(jq -r '.parameters.collected' "$WORK/model.json" | tr -d '\r')" == true ]]; then write_csv parameters; fi
+    fi
     if (( SAVE_DATA )); then write_data; fi
 }
 make_work() {   # private (0700) temp dir from mktemp only: no predictable fallback name
@@ -641,6 +754,18 @@ check_data_file() {   # check_data_file <path>: schema 1 from --save-data, or di
                and ([.clusters, .instances, .globals] | all(type == "array" and all(.[]; type == "object")))
                and ([.endpoints, .pma, .certs] | all(. == null or (type == "array" and all(.[]; type == "object"))))] | all | not) then "bad-region"
         elif ((.errors // []) | type) != "array" then "bad-errors"
+        # optional (v2.1.0+, --with-parameters): parameter groups with sane names, values strings or null
+        elif ([.source.regions[] | .params // null | select(. != null)
+               | (type == "object") and ((.groups // []) | type == "array") and ((.defaults // []) | type == "array")
+                 and ((.list // {}) | type == "object" and all(.[]; type == "array" and all(.[]; type == "string")))
+                 and all((.groups // [])[]; type == "object" and (.kind == "cluster" or .kind == "instance")
+                         and ((.name | type) == "string") and (.name | test("^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$"))
+                         and ((.family == null) or ((.family | type) == "string" and (.family | test("^[A-Za-z0-9._-]{1,64}$")))))
+                 and all((.defaults // [])[]; type == "object" and (.kind == "cluster" or .kind == "instance") and ((.family | type) == "string"))
+                 and all(((.groups // [])[] | (.user // [])[], (.system // [])[]), ((.defaults // [])[] | (.parameters // [])[]);
+                         type == "object" and ((.Name | type) == "string")
+                         and all(.ParameterValue, .Source, .ApplyType, .DataType, .AllowedValues; . == null or type == "string")
+                         and (.IsModifiable == null or (.IsModifiable | type) == "boolean"))] | all | not) then "bad-params"
         else "v\(.schema_version)" end' -- "$f" 2>/dev/null | tr -d '\r')" || st="bad-json"
     case "$st" in
         "v$DATA_SCHEMA_VERSION") return 0 ;;
@@ -648,6 +773,7 @@ check_data_file() {   # check_data_file <path>: schema 1 from --save-data, or di
         not-object|no-schema) die 3 "$f is not an RDS Inventory Explorer data file (schema \"$DATA_SCHEMA\" expected; write one with --save-data)" ;;
         bad-account)  die 3 "$f has an account that is not a 12-digit AWS account id - file rejected (damaged or edited?)" ;;
         bad-region)   die 3 "$f has a region block with an unexpected shape (bad account / region name, or non-list data) - file rejected" ;;
+        bad-params)   die 3 "$f has parameter data with an unexpected shape (group name, kind or a non-string value) - file rejected" ;;
         bad-errors)   die 3 "$f has an unexpected errors list - file rejected" ;;
         no-version)   die 3 "$f has no schema_version - unsupported old format; re-run the script with --save-data" ;;
         *-incomplete) die 3 "$f is missing accounts / source data (schema ${st%-incomplete}); re-run the script with --save-data" ;;
@@ -724,7 +850,7 @@ main() {
     fi
     build_model
     write_outputs
-    log_info "$(jq -r '.meta.counts | "Result: \(.global_clusters) global cluster(s), \(.clusters) cluster(s), \(.instances) instance(s) (\(.standalone_instances) standalone) in \(.accounts) account(s) / \(.regions_with_databases) region(s) with databases; \(.pending_actions) pending maintenance action(s) (\(.pending_past_due) past due); \(.errors) error(s)"' "$WORK/model.json"); $AWS_CALLS AWS call(s), 0 CloudWatch"
+    log_info "$(jq -r '.meta.counts | "Result: \(.global_clusters) global cluster(s), \(.clusters) cluster(s), \(.instances) instance(s) (\(.standalone_instances) standalone) in \(.accounts) account(s) / \(.regions_with_databases) region(s) with databases; \(.pending_actions) pending maintenance action(s) (\(.pending_past_due) past due); \(.errors) error(s)"' "$WORK/model.json"); $AWS_CALLS AWS call(s), 0 CloudWatch$(jq -r 'if .parameters.collected then "; parameter step \(.parameters.elapsed_ms / 1000 * 1000 | round / 1000)s (summed over regions)" else "" end' "$WORK/model.json" | tr -d '\r')"
     exit 0
 }
 

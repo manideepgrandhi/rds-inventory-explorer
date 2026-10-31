@@ -24,7 +24,14 @@ def CHECKS: [
   {id: "default_master_user",    sev: "Low",    label: "Default master username",        fix: "Use a non-default master user name"},
   {id: "old_generation",         sev: "Low",    label: "Previous-generation class",      fix: "Move to a current class (e.g. Graviton m7g / r7g)"},
   {id: "gp2_storage",            sev: "Low",    label: "gp2 storage",                    fix: "Move to gp3 (same or better baseline, lower cost)"},
-  {id: "stopped",                sev: "Low",    label: "Stopped",                        fix: "Start or delete it; AWS starts it again after 7 days"}];
+  {id: "stopped",                sev: "Low",    label: "Stopped",                        fix: "Start or delete it; AWS starts it again after 7 days"},
+  {id: "default_param_group",    sev: "Medium", label: "Default parameter group in use", fix: "Attach a custom (cluster / instance) parameter group; default.* groups cannot be changed"},
+  # parameter checks: run only on data from --with-parameters (effective values, see parameters.jq)
+  {id: "ssl_not_forced",         sev: "High",   label: "SSL / TLS not forced",           fix: "Set rds.force_ssl = 1 (PostgreSQL, SQL Server) or require_secure_transport = ON (MySQL)", params: true},
+  {id: "tls_old_enabled",        sev: "High",   label: "TLS 1.0 / 1.1 enabled",          fix: "Set rds.tls10 and rds.tls11 = disabled", params: true},
+  {id: "conn_logging_off",       sev: "Medium", label: "Connection logging off",         fix: "Set log_connections = 1 (and log_disconnections = 1)", params: true},
+  {id: "md5_password",           sev: "Medium", label: "md5 password encryption",        fix: "Set password_encryption = scram-sha-256 and reset the passwords", params: true},
+  {id: "param_pending_reboot",   sev: "Low",    label: "Parameter change pending reboot", fix: "Reboot in the next maintenance window to apply the parameter group", params: true}];
 
 def PORTS: {"postgres": 5432, "aurora-postgresql": 5432, "mysql": 3306, "mariadb": 3306, "aurora-mysql": 3306, "aurora": 3306,
             "docdb": 27017, "neptune": 8182};
@@ -90,7 +97,23 @@ def yesno: if . == true then "on" elif . == false then "off" else "not set" end;
    | if .type == "cluster" then deploy_checks($r)
      elif .type == "instance" then deploy_checks($r), node_checks($r)
      elif .type == "member" then node_checks($r)
-     else empty end] as $F
+     else empty end,
+   # default.* parameter group (known from describe-db-*; no --with-parameters needed)
+   (if .type == "cluster" then (.d.param_group // "") as $g | if $g | startswith("default.") then f("default_param_group"; .; "cluster group \($g)") else empty end
+    elif .type == "instance" or .type == "member" then ([(.d.param_groups // [])[].name | select(startswith("default."))][0]) as $g
+      | if $g then f("default_param_group"; .; "instance group \($g)") else empty end
+    else empty end)] as $F0
+| ([.resources[] | {key: .id, value: .}] | from_entries) as $RES
+| (.parameters.rows // []) as $PROWS
+# parameter checks: on the cluster and standalone instances; on a member only for a value its instance group sets
+| [$PROWS[] | . as $p | $RES[.res_id] as $r | select($r != null)
+   | (.values | to_entries[] | select(.value.flag != null and ($p.type != "member" or .value.from == "instance")) | .key as $n | .value as $v
+      | ({"rds.force_ssl": "ssl_not_forced", "require_secure_transport": "ssl_not_forced", "rds.tls10": "tls_old_enabled", "rds.tls11": "tls_old_enabled",
+          "log_connections": "conn_logging_off", "password_encryption": "md5_password"}[$n]) as $id
+      | select($id != null) | f($id; $r; "\($n) = \($v.v // "(empty)") (\(if $v.from == "default" then "engine default" else "\($v.from) group, " + ($v.src // "") end))")),
+     ([$p.apply_status, $p.cluster_apply_status] | map(select(. == "pending-reboot")) | if length > 0 then
+        f("param_pending_reboot"; $r; "ParameterApplyStatus = pending-reboot (\(if $p.apply_status == "pending-reboot" then "instance group" else "cluster group" end))") else empty end)] as $FP
+| ($F0 + ($FP | group_by(.check, .res_id) | map(.[0] + {value: (map(.value) | unique | join("; "))}))) as $F
 | ({High: 0, Medium: 1, Low: 2}) as $SR
 | ($F | sort_by($SR[.sev], .check, .account, .region, .res_name)
       | map(. + {csv: ([.sev, .account, .region, .res_name, .res_type, .engine, .label, .value, .fix] | map(if . == null then "" else tostring end))})) as $FS
@@ -109,5 +132,6 @@ def yesno: if . == true then "on" elif . == false then "off" else "not set" end;
         storage: (if .type == "member" then null else ($x.StorageType // (if (.engine | startswith("aurora")) then "aurora" else "n/a" end)) end),
         gb: (if .type == "instance" then $x.AllocatedStorage elif .type == "cluster" and ($x.DBClusterInstanceClass != null) then $x.AllocatedStorage else null end)}} end)
 | .meta.csv_columns.insights_findings = ["Severity", "Account", "Region", "Resource", "Resource type", "Engine", "Check", "Current value", "Fix hint"]
-| .insights = {checks: [CHECKS[] | .id as $i | . + {skipped: (($SKIP | index([$i])) != null)}], findings: $FS, skipped: $SKIP,
+| (.parameters.collected // false) as $PC
+| .insights = {checks: [CHECKS[] | .id as $i | . + {skipped: (($SKIP | index([$i])) != null), not_run: ((.params // false) and ($PC | not))}], findings: $FS, skipped: $SKIP,
                omitted: ["Engine version in Extended Support: describe-db-* only shows the lifecycle enrollment setting, not whether the version is past standard support, so it is not checked."]}

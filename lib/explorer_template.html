@@ -125,7 +125,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   table.stack tr{border-bottom:1px solid var(--border);padding:6px 0}
   table.stack td,.sec table.stack td{border:0;padding:3px 10px;white-space:normal!important;display:grid;grid-template-columns:minmax(96px,38%) minmax(0,1fr);gap:8px}
   table.stack td::before{content:attr(data-label);color:var(--muted);font-size:12px}
-  .tabs{padding:0 10px}.toolbar .export{margin-left:0}
+  .tabs{padding:0 6px;overflow-x:auto;scrollbar-width:none}.tab{padding:9px 8px}.toolbar .export{margin-left:0}
 }
 .igrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:14px}
 .igrid .panel{padding:10px 14px}.igrid h3{margin:0 0 8px;font-size:13px;color:var(--muted)}
@@ -136,6 +136,17 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
 .sev{font-weight:600}.sev-High{color:var(--bad)}.sev-Medium{color:var(--warn)}.sev-Low{color:var(--muted)}
 .fchip{display:inline-flex;gap:8px;align-items:center;margin-left:10px}
 #in-table td:nth-child(2),#in-table td:nth-child(3){white-space:nowrap}
+.seg{display:inline-flex}.seg button{border-radius:0;margin-left:-1px}.seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0}
+.seg button[aria-pressed=true]{background:var(--accent-bg);color:var(--accent);border-color:var(--accent);position:relative}
+.chk{display:inline-flex;gap:5px;align-items:center;font-size:13px;color:var(--muted);white-space:nowrap}
+.pres{margin-bottom:10px;overflow:hidden}.pmem{margin-left:28px}.hlres{outline:2px solid var(--accent)}
+.phead{padding:9px 14px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.phead > a{font-weight:650}.pmeta{display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--muted);font-size:12.5px;margin-left:6px}
+.pmsg{padding:14px}.pnotes{font-size:12.5px;margin:0 0 10px}
+code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:4px}
+.flag{font-size:11.5px}.from{font-size:12px}.from-instance{color:var(--i)}.from-cluster{color:var(--c)}.from-default{color:var(--muted)}
+.ptab td:nth-child(1){white-space:nowrap}
+@media (max-width:760px){.pmem{margin-left:12px}.seg{flex-wrap:wrap}}
 @media (max-width:700px){dl{grid-template-columns:1fr}dt{margin-top:6px}}
 </style>
 </head>
@@ -155,6 +166,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   <button type="button" class="tab" role="tab" id="tab-inventory" aria-controls="view">Inventory</button>
   <button type="button" class="tab" role="tab" id="tab-pending" aria-controls="view">Pending maintenance</button>
   <button type="button" class="tab" role="tab" id="tab-insights" aria-controls="view">Insights</button>
+  <button type="button" class="tab" role="tab" id="tab-parameters" aria-controls="view">Parameters</button>
 </nav>
 <div class="toolbar" id="inv-toolbar">
   <div class="search">
@@ -186,6 +198,18 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   <select id="if-sev" aria-label="Severity"></select>
   <button type="button" id="iclear">Clear</button>
   <button type="button" id="in-csv" class="export" title="Download the findings shown (filters) as CSV">Export CSV</button>
+</div>
+<div class="toolbar" id="px-toolbar" hidden>
+  <span class="seg" role="group" aria-label="Parameters view"><button type="button" id="pv-resource">By resource</button><button type="button" id="pv-group">By parameter group</button><button type="button" id="pv-drift">Drift</button></span>
+  <select id="xf-account" aria-label="Account"></select>
+  <select id="xf-region" aria-label="Region"></select>
+  <select id="xf-engine" aria-label="Engine"></select>
+  <select id="xf-group" aria-label="Parameter group"></select>
+  <select id="xf-param" aria-label="Parameter"></select>
+  <label class="chk"><input type="checkbox" id="xf-nondef"> non-default only</label>
+  <label class="chk"><input type="checkbox" id="xf-flag"> flagged only</label>
+  <button type="button" id="xclear">Clear</button>
+  <button type="button" id="px-csv" class="export" title="Download the current Parameters view (filters) as CSV">Export CSV</button>
 </div>
 <main>
   <div id="view"></div>
@@ -241,13 +265,13 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
       var i = kv.indexOf('='); if (i <= 0) return;
       try { o[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); } catch (e) { o._bad = true; }
     });
-    o.tab = o.tab === 'pending' || o.tab === 'insights' ? o.tab : 'inventory';
+    o.tab = o.tab === 'pending' || o.tab === 'insights' || o.tab === 'parameters' ? o.tab : 'inventory';
     return o;
   }
   function mkHash(o) {
     var parts = [];
-    if (o.tab === 'pending' || o.tab === 'insights') parts.push('tab=' + o.tab);
-    ['id', 'res', 'f', 'fv'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
+    if (o.tab === 'pending' || o.tab === 'insights' || o.tab === 'parameters') parts.push('tab=' + o.tab);
+    ['id', 'res', 'f', 'fv', 'pv', 'grp'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
     return parts.length ? '#' + parts.join('&') : '';
   }
   function go(o) {
@@ -326,6 +350,14 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   }
 
   /* ---------- cards ---------- */
+  function pgCell(r, kind, name) {   // a card's parameter group -> its row in the Parameters tab (when collected)
+    if (!name) return dash();
+    var gid = r.account + '|' + r.region + '|' + kind + '|' + name, g = (DATA.parameters && DATA.parameters.groups || []).filter(function (x) { return x.gid === gid; })[0];
+    if (!g) return h('code', { text: name });
+    return h('span', null, h('a', { href: '#tab=parameters&pv=group&grp=' + encodeURIComponent(gid), 'data-grp': gid, cls: 'pglink', title: 'Show this group in the Parameters tab' }, h('code', { text: name })),
+      ' ', h('a', { href: '#tab=parameters&res=' + encodeURIComponent(r.id), cls: 'muted pvlink', title: 'Effective values of this resource' }, 'values'),
+      name.indexOf('default.') === 0 ? [' ', pill('default', 'warn')] : null);
+  }
   function cardHead(r, extra) {
     return h('div', { cls: 'card-head' },
       h('div', null,
@@ -396,7 +428,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
           ['Pending actions', pend.length ? pill(pend.length + ' pending', 'warn') : pill('none', 'ok')]])),
         sec('Pending maintenance', pendingTable(pend, true), true),
         sec('Network & configuration', dl([['DB subnet group', mono(d.subnet_group)], ['Security groups', list(d.security_groups)],
-          ['Cluster parameter group', mono(d.param_group)], ['CA certificate', cas.length ? h('div', null, cas.map(function (c) { return h('div', null, caCell(c)); })) : dash()],
+          ['Cluster parameter group', pgCell(r, 'cluster', d.param_group)], ['CA certificate', cas.length ? h('div', null, cas.map(function (c) { return h('div', null, caCell(c)); })) : dash()],
           ['Network type', v(d.network_type)], ['Availability zones', list(d.azs, function (x) { return x; })]])),
         sec('Engine & storage', dl([['Engine mode', v(d.engine_mode)], ['Instance class (cluster)', v(r.class)],
           d.serverless_v2 ? ['Serverless v2 capacity', d.serverless_v2.MinCapacity + ' - ' + d.serverless_v2.MaxCapacity + ' ACU'] : null,
@@ -433,7 +465,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
           ['Log exports', list(d.logs_exports, function (x) { return x; })]])),
         sec('Backups', d.cluster ? h('div', null, h('span', { cls: 'muted', text: 'Backups are managed by the cluster: ' }), link(d.cluster.id, d.cluster.name)) : dl(backupRows(d.backup))),
         sec('Maintenance & upgrades', dl([['Maintenance window', win(d.maintenance_window)], ['Auto minor version upgrade', yn(d.auto_minor)],
-          ['Parameter group(s)', d.param_groups.length ? h('span', null, d.param_groups.map(function (p, i) { return [i ? ', ' : '', h('code', { text: p.name }), p.status && p.status !== 'in-sync' ? [' ', pill(p.status, 'warn')] : '']; })) : dash()],
+          ['Parameter group(s)', d.param_groups.length ? h('span', null, d.param_groups.map(function (p, i) { return [i ? ', ' : '', pgCell(r, 'instance', p.name), p.status && p.status !== 'in-sync' ? [' ', pill(p.status, 'warn')] : '']; })) : dash()],
           ['Option group(s)', list(d.option_groups)], ['License', v(d.license)], ['Engine lifecycle', v(d.engine_lifecycle)], ['Created', when(d.created)],
           ['Database name', v(d.database_name)], ['Resource id', mono(d.resource_id)]])),
         sec('Pending maintenance', pendingTable(pend, false), true),
@@ -746,6 +778,160 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
     $('tab-pending').appendChild(b);
   })();
 
+  /* ---------- Parameters tab (--with-parameters): by resource / by parameter group / drift ---------- */
+  var PA = DATA.parameters || { collected: false, rows: [], groups: [], drift: [], csv: [], notes: [], not_collected: [] };
+  var PROWS = PA.rows || [], PGRP = PA.groups || [], PDRIFT = PA.drift || [];
+  var GBY = {}; PGRP.forEach(function (g) { GBY[g.gid] = g; });
+  var PCSV = [], pOff = 0;   // the script's CSV rows (lib/parameters.jq) for each resource row, same order
+  PROWS.forEach(function (r) { var n = Object.keys(r.values).length; PCSV.push((PA.csv || []).slice(pOff, pOff + n)); pOff += n; });
+  var XF = { account: $('xf-account'), region: $('xf-region'), engine: $('xf-engine'), group: $('xf-group'), param: $('xf-param') };
+  var XC = { nondef: $('xf-nondef'), flagged: $('xf-flag') };
+  opts(XF.account, 'accounts', uniq(PROWS.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
+  opts(XF.region, 'regions', uniq(PROWS.map(function (r) { return r.region; })).map(function (x) { return [x, x]; }));
+  opts(XF.engine, 'engines', uniq(PROWS.map(function (r) { return r.engine; })).map(function (x) { return [x, x]; }));
+  opts(XF.group, 'parameter groups', PGRP.map(function (g) { return [g.gid, g.name + '  (' + g.kind + ', ' + g.account + ' ' + g.region + ')']; }));
+  opts(XF.param, 'parameters', uniq([].concat.apply([], PROWS.map(function (r) { return Object.keys(r.values); }))).map(function (x) { return [x, x]; }));
+  function gidHash(gid) { return mkHash({ tab: 'parameters', pv: 'group', grp: gid }); }
+  function grpLink(gid, fallback) {
+    var g = gid && GBY[gid];
+    if (!g) return fallback ? h('code', { text: fallback }) : dash();
+    return h('span', null, h('a', { href: gidHash(gid), 'data-grp': gid, title: 'Open this parameter group', text: g.name }),
+      g.is_default ? [' ', pill('default', 'warn')] : null, g.error ? [' ', pill('not read', 'bad')] : null);
+  }
+  function gidOf(r, kind, name) { return name ? r.account + '|' + r.region + '|' + kind + '|' + name : null; }
+  function scopeOk(x) { return (!XF.account.value || x.account === XF.account.value) && (!XF.region.value || x.region === XF.region.value); }
+  function pRows() {   // resource rows + the parameter names kept, after the filters
+    return PROWS.map(function (r, i) {
+      if (!scopeOk(r) || (XF.engine.value && r.engine !== XF.engine.value)) return null;
+      if (XF.group.value && r.cluster_group !== XF.group.value && r.instance_group !== XF.group.value) return null;
+      var ks = Object.keys(r.values).filter(function (k) {
+        var x = r.values[k];
+        return (!XF.param.value || k === XF.param.value) && (!XC.nondef.checked || x.nondef) && (!XC.flagged.checked || x.flag);
+      });
+      if (!ks.length && (XF.param.value || XC.nondef.checked || XC.flagged.checked)) return null;
+      return { r: r, i: i, ks: ks };
+    }).filter(Boolean);
+  }
+  function pGroups() {
+    return PGRP.filter(function (g) {
+      if (!scopeOk(g) || (XF.group.value && g.gid !== XF.group.value)) return false;
+      if (XF.engine.value && !g.used_by.some(function (u) { return BY[u.id] && BY[u.id].engine === XF.engine.value; })) return false;
+      if (XC.nondef.checked && !g.nondefault) return false;
+      if (XF.param.value && !g.values[XF.param.value]) return false;
+      return true;
+    });
+  }
+  function pDrift() {
+    var rows = pRows(), ok = {}; rows.forEach(function (x) { ok[x.r.res_id] = 1; });
+    return PDRIFT.filter(function (d) { return !XF.param.value || d.param === XF.param.value; }).map(function (d) {
+      var vs = d.values.map(function (x) { return { v: x.v, resources: x.resources.filter(function (y) { return ok[y.id]; }) }; }).filter(function (x) { return x.resources.length; });
+      return vs.length > 1 ? { section: d.section, param: d.param, values: vs } : null;
+    }).filter(Boolean);
+  }
+  function pv() { var x = hp().pv; return x === 'group' || x === 'drift' ? x : 'resource'; }
+  function valCell(x) {
+    var raw = x.v == null ? h('span', { cls: 'muted', text: '(empty)' }) : h('code', { cls: x.nondef ? 'nd' : null, text: x.v });
+    return h('span', null, raw, x.flag ? [' ', h('span', { cls: 'pill p-bad flag', text: '⚑ ' + x.flag })] : null);
+  }
+  function fromCell(r, x) {
+    var gname = x.group ? x.group.split('|').pop() : '';
+    var lbl = x.from === 'instance' ? 'instance group' : x.from === 'cluster' ? 'cluster group' : 'engine default';
+    return h('span', null, h('span', { cls: 'from from-' + x.from, text: lbl }), x.group ? [' · ', grpLink(x.group, gname)] : null);
+  }
+  function approxCell(x) { return x.approx != null ? h('span', { title: 'approximate: DBInstanceClassMemory estimated from the instance class', text: '≈ ' + Number(x.approx).toLocaleString('en-US') }) : ''; }
+  function resBlock(x) {
+    var r = x.r, res = BY[r.res_id], st = [r.apply_status, r.cluster_apply_status].filter(Boolean);
+    var meta = [h('span', null, h('code', { text: r.account }), ' ' + r.region), h('span', { text: r.engine + (r.class ? ' · ' + r.class : '') }),
+      r.cluster_name ? h('span', null, 'cluster ', r.cluster_id ? h('a', { href: hashFor(r.cluster_id), text: r.cluster_name }) : r.cluster_name) : null,
+      r.global ? h('span', null, 'global ', h('b', { text: r.global })) : null,
+      r.cluster_group ? h('span', null, 'cluster group ', grpLink(r.cluster_group)) : null,
+      r.instance_group ? h('span', null, 'instance group ', grpLink(r.instance_group)) : null,
+      st.length ? h('span', null, 'apply status ', st.map(function (s) { return [pill(s, s === 'in-sync' ? 'ok' : 'warn'), ' ']; })) : null,
+      r.section === 'oracle' && res && res.d && res.d.option_groups ? h('span', null, 'option group(s) ', list(res.d.option_groups)) : null];
+    var body = r.group_error ? h('div', { cls: 'empty pmsg', text: 'Parameter group not read: ' + r.group_error }) :
+      !x.ks.length ? h('div', { cls: 'empty pmsg', text: r.section ? 'No listed parameter returned for this resource.' : 'Engine not in lib/parameters.list.' }) :
+      table(['Parameter', 'Value', 'Approx. computed', 'Source', 'From', 'Apply type'], x.ks.map(function (k) {
+        var p = r.values[k];
+        return [h('code', { text: k }), valCell(p), approxCell(p), v(p.src), fromCell(r, p), v(p.apply)];
+      }), 'stack ptab');
+    return h('div', { cls: 'panel pres' + (r.type === 'member' && r.cluster_id ? ' pmem' : ''), 'data-res': r.res_id },
+      h('div', { cls: 'phead' }, badge(r.type), ' ', link(r.res_id, r.name), h('span', { cls: 'pmeta' }, meta)), body);
+  }
+  function renderParams(o) {
+    var view = $('view'); view.textContent = '';
+    document.title = 'Parameters - RDS Inventory Explorer';
+    var mode = pv();
+    ['resource', 'group', 'drift'].forEach(function (m) { $('pv-' + m).setAttribute('aria-pressed', String(m === mode)); });
+    if (!PA.collected) {
+      view.appendChild(h('div', { cls: 'panel empty', id: 'px-none', text: 'Parameters were not collected for this report. Re-run with --with-parameters (or with-parameters=true in the config file).' }));
+      return;
+    }
+    var notes = (PA.not_collected || []).map(function (a) { return 'Parameters not collected for account ' + a + ' (data file without --with-parameters).'; }).concat(PA.notes || []);
+    view.appendChild(h('div', { cls: 'pnotes muted', id: 'px-notes' }, notes.map(function (n) { return h('div', { text: n }); })));
+    if (mode === 'group') {
+      var gs = pGroups();
+      if (o.grp && GBY[o.grp]) gs = [GBY[o.grp]];
+      view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Parameter groups' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + gs.length + ' of ' + PGRP.length }),
+        o.grp ? h('button', { type: 'button', id: 'px-allgrp', onclick: function () { go({ tab: 'parameters', pv: 'group' }); } }, 'Show all groups') : null));
+      view.appendChild(h('div', { cls: 'panel scroll' }, table(['Group', 'Type', 'Family', 'Account', 'Region', 'Non-default', 'Used by'], gs.map(function (g) {
+        return [h('span', null, h('code', { text: g.name }), g.is_default ? [' ', h('span', { cls: 'pill p-warn', title: 'Insights: Default parameter group in use', text: '⚑ default group in use' })] : null,
+            g.error ? [' ', h('span', { cls: 'pill p-bad', title: g.error, text: 'not read: ' + (g.error.match(/\(([A-Za-z]+)\)/) || [0, 'error'])[1] })] : null),
+          g.kind, v(g.family), h('code', { text: g.account }), g.region, String(g.nondefault),
+          g.used_by.length ? h('span', null, g.used_by.map(function (u, i) { return [i ? ', ' : '', link(u.id, u.name), ' ', badge(u.type)]; })) : dash()];
+      }), 'stack pmt')));
+      view.lastChild.querySelector('table').id = 'px-groups';
+      if (gs.length === 1) {
+        var g = gs[0], ks = Object.keys(g.values).filter(function (k) { return (PA.list[g.section] || []).indexOf(k) >= 0; });
+        view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: g.name + ': user / system values' })));
+        view.appendChild(h('div', { cls: 'panel scroll', id: 'px-gvals' }, ks.length ? table(['Parameter', 'Value', 'Source', 'Apply type', 'Allowed values'], ks.map(function (k) {
+          var p = g.values[k]; return [h('code', { text: k }), p.v == null ? dash() : h('code', { cls: p.src === 'user' ? 'nd' : null, text: p.v }), v(p.src), v(p.apply), v(p.allowed)];
+        }), 'stack') : h('div', { cls: 'empty', text: g.error ? 'Not read: ' + g.error : 'No listed parameter set at user / system level: engine defaults apply.' })));
+      }
+      return;
+    }
+    if (mode === 'drift') {
+      var ds = pDrift();
+      view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Drift within an engine family' }), h('span', { cls: 'muted', id: 'px-shown', text: ds.length + ' parameter(s) with more than one effective value' })));
+      if (!ds.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'No drift: every listed parameter has one value per engine family.' })); return; }
+      view.appendChild(h('div', { cls: 'panel scroll' }, table(['Engine family', 'Parameter', 'Value', 'Resources'], [].concat.apply([], ds.map(function (d) {
+        return d.values.map(function (x, i) { return [i ? '' : d.section, i ? '' : h('code', { text: d.param }), h('code', { text: x.v }),
+          h('span', null, x.resources.map(function (y, j) { return [j ? ', ' : '', link(y.id, y.name)]; }))]; });
+      })), 'stack pmt')));
+      view.lastChild.querySelector('table').id = 'px-drift';
+      return;
+    }
+    var rows = pRows();
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'By resource' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + rows.length + ' of ' + PROWS.length + ' resource(s) · effective value: instance group, then cluster group, then engine default' })));
+    if (!rows.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
+    rows.forEach(function (x) { view.appendChild(resBlock(x)); });
+    if (o.res) { var el = view.querySelector('[data-res="' + (window.CSS && CSS.escape ? CSS.escape(o.res) : o.res) + '"]'); if (el) { el.classList.add('hlres'); el.scrollIntoView(); } }
+  }
+  function paramsCsv() {
+    var mode = pv();
+    if (mode === 'group') {
+      var o = hp(), gs = o.grp && GBY[o.grp] ? [GBY[o.grp]] : pGroups();
+      return csvText([['Account', 'Region', 'Type', 'Parameter group', 'Family', 'Default group', 'Non-default', 'Used by', 'Error']].concat(gs.map(function (g) {
+        return [g.account, g.region, g.kind, g.name, g.family || '', g.is_default ? 'yes' : 'no', String(g.nondefault), g.used_by.map(function (u) { return u.name; }).join(' '), g.error || ''];
+      })));
+    }
+    if (mode === 'drift') return csvText([['Engine family', 'Parameter', 'Value', 'Resources']].concat([].concat.apply([], pDrift().map(function (d) {
+      return d.values.map(function (x) { return [d.section, d.param, x.v, x.resources.map(function (y) { return y.name; }).join(' ')]; });
+    }))));
+    return csvText([CSVCOLS.parameters || []].concat([].concat.apply([], pRows().map(function (x) {
+      var keys = Object.keys(x.r.values); return x.ks.map(function (k) { return PCSV[x.i][keys.indexOf(k)]; });
+    }))));
+  }
+  Object.keys(XF).forEach(function (k) { XF[k].addEventListener('change', render); });
+  Object.keys(XC).forEach(function (k) { XC[k].addEventListener('change', render); });
+  ['resource', 'group', 'drift'].forEach(function (m) { $('pv-' + m).addEventListener('click', function () { go({ tab: 'parameters', pv: m === 'resource' ? '' : m }); }); });
+  $('xclear').addEventListener('click', function () { Object.keys(XF).forEach(function (k) { XF[k].value = ''; }); Object.keys(XC).forEach(function (k) { XC[k].checked = false; }); go({ tab: 'parameters', pv: hp().pv }); });
+  $('px-csv').addEventListener('click', function () { download(fname('parameters' + (pv() === 'resource' ? '' : '_' + pv())), paramsCsv()); });
+  $('tab-parameters').addEventListener('click', function () { go({ tab: 'parameters', id: hp().id }); });
+  (function () {
+    var nf = 0; PROWS.forEach(function (r) { Object.keys(r.values).forEach(function (k) { if (r.values[k].flag) nf++; }); });
+    $('tab-parameters').appendChild(h('span', { cls: 'n' + (nf ? ' warn' : ''), id: 'tab-parameters-n', title: PA.collected ? nf + ' flagged value(s)' : 'not collected', text: PA.collected ? String(nf) : '–' }));
+  })();
+
   /* ---------- views ---------- */
   function current() {
     var o = hp();
@@ -777,9 +963,11 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
     $('tab-inventory').setAttribute('aria-selected', String(o.tab === 'inventory'));
     $('tab-pending').setAttribute('aria-selected', String(o.tab === 'pending'));
     $('tab-insights').setAttribute('aria-selected', String(o.tab === 'insights'));
-    $('inv-toolbar').hidden = o.tab !== 'inventory'; $('pm-toolbar').hidden = o.tab !== 'pending'; $('in-toolbar').hidden = o.tab !== 'insights';
+    $('tab-parameters').setAttribute('aria-selected', String(o.tab === 'parameters'));
+    $('inv-toolbar').hidden = o.tab !== 'inventory'; $('pm-toolbar').hidden = o.tab !== 'pending'; $('in-toolbar').hidden = o.tab !== 'insights'; $('px-toolbar').hidden = o.tab !== 'parameters';
     if (o.tab === 'pending') { closeSugg(); renderPending(o); return; }
     if (o.tab === 'insights') { closeSugg(); renderInsights(); return; }
+    if (o.tab === 'parameters') { closeSugg(); renderParams(o); return; }
     var r = current();
     if (o.id && !r) {
       view.textContent = '';
@@ -824,7 +1012,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
       h('summary', { text: ERR.length + ' error(s) while collecting - the affected account / region data may be incomplete' }),
       table(['Account', 'Profile', 'Region', 'Call', 'Message'], ERR.map(function (e) { return [e.account, e.profile, e.region, h('code', { text: e.call }), e.message]; }))));
   }
-  $('foot').textContent = M.script + ' v' + M.version + '  ·  read-only (rds describe-* only, no CloudWatch)  ·  ' + (M.merge ? 'merged offline from saved data, 0 AWS calls' : (M.aws_calls || 0) + ' AWS calls') + '  ·  times shown in UTC and ' + M.tz + '  ·  works offline';
+  $('foot').textContent = M.script + ' v' + M.version + '  ·  read-only (rds describe-* only, no CloudWatch)  ·  ' + (M.merge ? 'merged offline from saved data, 0 AWS calls' : (M.aws_calls || 0) + ' AWS calls') + (DATA.parameters && DATA.parameters.collected ? '  ·  parameter step ' + ((DATA.parameters.elapsed_ms || 0) / 1000).toFixed(3) + ' s' : '') + '  ·  times shown in UTC and ' + M.tz + '  ·  works offline';
 
   var tb = $('theme-btn');
   function themeLabel() { var p = document.documentElement.getAttribute('data-theme-pref') || 'auto'; tb.textContent = 'Theme: ' + p; }
