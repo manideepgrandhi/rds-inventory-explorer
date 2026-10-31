@@ -9,14 +9,16 @@
 # --save-data also writes the normalised dataset as JSON; --merge FILE... combines such files from several accounts
 # into one report offline (no AWS CLI, no credentials, zero AWS calls; works in Git Bash on Windows).
 # Exit: 0 report written, 1 usage, 2 pre-check / no usable profile, 3 bad merge input, 4 output/internal error, 130 interrupted.
-# Data model: lib/explorer.jq. Page (HTML/CSS/JS): lib/explorer_template.html. Merge: lib/merge.jq. CSV: lib/csv.jq.
+# Data model: lib/explorer.jq (+ lib/insights.jq: Insights tab facets and audit findings). Page (HTML/CSS/JS): lib/explorer_template.html. Merge: lib/merge.jq. CSV: lib/csv.jq.
 
 set -Eeuo pipefail
 umask 077 2>/dev/null || true
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="2.0.0"
 readonly DATA_SCHEMA="rds-inventory-explorer/data" DATA_SCHEMA_VERSION=1
+# Insights audit checks (lib/insights.jq); --skip-checks takes these ids
+readonly CHECK_IDS="public_access storage_not_encrypted deletion_protection_off copy_tags_off single_az backup_retention_low iam_auth_off ca_expiring auto_minor_off pi_off em_off no_log_exports default_port default_master_user old_generation gp2_storage stopped"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB_DIR="${RDS_EXPLORER_LIB:-$SCRIPT_DIR/lib}"
@@ -24,6 +26,7 @@ LIB="$LIB_DIR/explorer.jq"
 TEMPLATE="$LIB_DIR/explorer_template.html"
 CSV_LIB="$LIB_DIR/csv.jq"
 MERGE_LIB="$LIB_DIR/merge.jq"
+INSIGHTS_LIB="$LIB_DIR/insights.jq"
 
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
     echo "$SCRIPT_NAME: bash 4.4+ required (found $BASH_VERSION)" >&2; exit 2
@@ -43,6 +46,7 @@ MAX_ATTEMPTS=5
 KEEP_WORKDIR=0
 DRY_RUN=0
 WRITE_CSV=0
+WRITE_HTML=1
 SAVE_DATA=0
 MERGE=0
 MERGE_ARGS=()
@@ -51,6 +55,10 @@ CSV_EOL=$'\r\n'
 JQ_CRLF=0
 STAMP=""
 VERBOSE=0
+SKIP_CHECKS=()
+FORMATS=()
+FILE_TAG=""
+CONFIG_FILE=""
 
 WORK=""
 AWS_CALLS=0
@@ -83,16 +91,22 @@ Scope:
       --include-docdb       Also list DocumentDB and Neptune clusters (default: skipped)
 
 Output:
-  -o, --output-dir DIR      Directory for <prefix>_YYYYmmdd_HHMMSS.html (default: current directory)
+  -o, --output-dir DIR      Directory for <prefix>_<account>_YYYYmmdd_HHMMSS.html (default: current directory)
       --prefix NAME         File name prefix (default: rds_inventory_explorer)
       --tz ZONE             Second time zone shown next to UTC (default: Asia/Kolkata)
-      --save-data           Also write <prefix>_data_<ts>.json: the normalised dataset (accounts, regions scanned,
+      --save-data           Also write <prefix>_<account>_<ts>_data.json: the normalised dataset (accounts, regions scanned,
                             errors, resources, pending actions) plus the raw describe-* output, for --merge
-      --csv                 Also write <prefix>_inventory_<ts>.csv (one row per resource, tags as columns) and
-                            <prefix>_pending_<ts>.csv (one row per pending maintenance action) next to the HTML
+  -F, --format LIST         html (default), csv or html,csv. csv writes next to the HTML:
+                            <prefix>_<account>_<ts>_inventory.csv (one row per resource, tags as columns),
+                            <prefix>_<account>_<ts>_pending.csv (one row per pending maintenance action) and
+                            <prefix>_<account>_<ts>_insights_findings.csv (one row per resource per failed check)
+      --csv                 Same as -F html,csv
+      --skip-checks LIST    Insights audit checks to switch off, comma-separated ids:
+                            ${CHECK_IDS// /, }
+  -c, --config FILE         key=value file (long option names without --; never sourced). Options override it.
 
 Merge (offline; no AWS CLI, credentials or AWS calls needed - e.g. Git Bash on a Windows desktop):
-      --merge FILE...       Combine --save-data JSON files (globs, several args, C:/... or /c/... paths) into one
+      --merge FILE|DIR...   Combine --save-data JSON files (folders, globs, several args, C:/... or /c/... paths) into one
                             report. Same account in two files: the newer collection wins (logged). Days left and
                             urgency are recomputed at merge time. Combine with -o, --prefix, --csv, --save-data, --tz.
 
@@ -106,7 +120,7 @@ Behaviour:
 
 Examples: $SCRIPT_NAME -P prod,dev -A -o ~/rds_inventory
           $SCRIPT_NAME -A --save-data                       (in each account's CloudShell; download the .json)
-          $SCRIPT_NAME --merge ~/Downloads/rds_inventory_explorer_data_*.json --csv -o ~/rds_merged
+          $SCRIPT_NAME --merge ~/Downloads/rds "C:/Users/me/Downloads/rds" -F html,csv -o ~/rds_merged
 Exit codes: 0 report written, 1 usage, 2 pre-check (aws/jq missing, no profile has valid credentials),
             3 merge input not a valid / supported data file, 4 output error, 130 interrupted. Errors in one account / region are shown in the page, not fatal.
 USAGE
@@ -149,7 +163,10 @@ parse_args() {
                                 while (( $# )) && [[ "$1" != -?* ]]; do MERGE_ARGS+=("$1"); shift; done ;;
             --aws-timeout)      need_arg "$opt" $#; AWS_TIMEOUT="$2"; shift 2 ;;
             --max-attempts)     need_arg "$opt" $#; MAX_ATTEMPTS="$2"; shift 2 ;;
-            --csv)              WRITE_CSV=1; shift ;;
+            --csv)              FORMATS+=(html csv); shift ;;
+            -F|--format)        need_arg "$opt" $#; add_list FORMATS "$2"; shift 2 ;;
+            --skip-checks)      need_arg "$opt" $#; add_list SKIP_CHECKS "$2"; shift 2 ;;
+            -c|--config)        need_arg "$opt" $#; shift 2 ;;   # read first, in load_config
             --keep-workdir)     KEEP_WORKDIR=1; shift ;;
             --dry-run)          DRY_RUN=1; shift ;;
             -v|--verbose)       VERBOSE=1; shift ;;
@@ -158,6 +175,35 @@ parse_args() {
             *)                  die 1 "Unknown option: $opt (see --help)" ;;
         esac
     done
+}
+
+is_true() { case "${1,,}" in 1|y|yes|true|on) return 0 ;; *) return 1 ;; esac; }
+load_config() {   # load_config <args...>: finds -c / --config, reads key=value lines (never sourced), before parse_args
+    local f="" a prev="" line n=0 k v
+    for a in "$@"; do
+        case "$prev" in -c|--config) f="$a" ;; esac
+        case "$a" in --config=*) f="${a#--config=}" ;; esac
+        prev="$a"
+    done
+    [[ -n "$f" ]] || return 0
+    [[ -f "$f" && -r "$f" ]] || die 1 "Config file not readable: $f"
+    CONFIG_FILE="$f"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$(( n + 1 )); line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ "$line" =~ ^[[:space:]]*([A-Za-z_-]+)[[:space:]]*=[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]] || die 1 "$f line $n: expected key=value"
+        k="${BASH_REMATCH[1]//_/-}"; v="${BASH_REMATCH[2]:-}"
+        case "$k" in
+            profile) add_list PROFILES "$v" ;; region) add_list REGIONS "$v" ;;
+            all-regions) is_true "$v" && ALL_REGIONS=1 ;; no-discover) is_true "$v" && DISCOVER=0 ;;
+            probe-parallel) PROBE_PARALLEL="$v" ;; include-docdb) is_true "$v" && INCLUDE_DOCDB=1 ;;
+            output-dir) OUTPUT_DIR="$v" ;; prefix) PREFIX="$v" ;; tz) DISPLAY_TZ="$v"; TZ_SET=1 ;;
+            format) add_list FORMATS "$v" ;; csv) is_true "$v" && FORMATS+=(html csv) ;;
+            skip-checks) add_list SKIP_CHECKS "$v" ;; save-data) is_true "$v" && SAVE_DATA=1 ;;
+            aws-timeout) AWS_TIMEOUT="$v" ;; max-attempts) MAX_ATTEMPTS="$v" ;;
+            *) die 1 "$f line $n: unknown key '$k'" ;;
+        esac
+    done <"$f"
 }
 
 posint() {   # posint <var> <option>
@@ -179,6 +225,13 @@ validate() {
     for x in "${REGIONS[@]}"; do [[ "$x" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]+$ ]] || die 1 "Invalid region: $x"; done
     for x in "${PROFILES[@]}"; do [[ "$x" =~ ^[A-Za-z0-9_.+@-]+$ ]] || die 1 "Invalid profile name: $x"; done
     posint AWS_TIMEOUT --aws-timeout; posint MAX_ATTEMPTS --max-attempts
+    (( ${#FORMATS[@]} )) && WRITE_HTML=0
+    for x in "${FORMATS[@]}"; do
+        case "$x" in html) WRITE_HTML=1 ;; csv) WRITE_CSV=1 ;; *) die 1 "Unknown format '$x' (html, csv)" ;; esac
+    done
+    for x in "${SKIP_CHECKS[@]}"; do
+        [[ " $CHECK_IDS " == *" $x "* ]] || die 1 "Unknown check '$x' for --skip-checks (known: ${CHECK_IDS// /, })"
+    done
     if [[ ! "$PROBE_PARALLEL" =~ ^[0-9]+$ ]] || (( 10#$PROBE_PARALLEL < 1 || 10#$PROBE_PARALLEL > 32 )); then die 1 "--probe-parallel must be 1-32"; fi
     PROBE_PARALLEL=$(( 10#$PROBE_PARALLEL ))
     if (( ! MERGE || TZ_SET )); then   # merge without --tz re-uses the zone of the newest file (no tz database needed)
@@ -198,6 +251,7 @@ precheck_jq() {
     [[ -r "$LIB" ]] || die 2 "Library missing: $LIB"
     [[ -r "$TEMPLATE" ]] || die 2 "Page template missing: $TEMPLATE"
     [[ -r "$CSV_LIB" ]] || die 2 "CSV library missing: $CSV_LIB"
+    [[ -r "$INSIGHTS_LIB" ]] || die 2 "Insights library missing: $INSIGHTS_LIB"
     [[ -r "$MERGE_LIB" ]] || die 2 "Merge library missing: $MERGE_LIB"
     # a native Windows jq.exe turns every LF it prints into CRLF: then the CSV is built with LF (jq adds the CR)
     if [[ "$(jq -jn '"x\n"' | wc -c | tr -d ' \r')" != 2 ]]; then CSV_EOL=$'\n' JQ_CRLF=1; log_debug "jq writes CRLF line ends; adapting"; fi
@@ -423,11 +477,21 @@ build_model() {
     jq -n --slurpfile meta "$WORK/meta.json" --slurpfile regions "$WORK/regions.json" --slurpfile errors "$WORK/all_errors.json" \
         '{meta: $meta[0], regions: $regions[0], errors: $errors[0]}' >"$WORK/raw.json" || die 4 "Assembling the report failed"
     jq -c -f "$LIB" "$WORK/raw.json" >"$WORK/model.json" || die 4 "Building the data model failed"
+    add_insights
 }
 
+skip_json() { if (( ${#SKIP_CHECKS[@]} )); then printf '%s\n' "${SKIP_CHECKS[@]}" | jq -R . | jq -cs . | tr -d '\r'; else printf '[]'; fi; }
+add_insights() {   # model.json (explorer.jq) -> + Insights facets / audit findings (insights.jq) + file tag
+    jq -c --argjson skip "$(skip_json)" -f "$INSIGHTS_LIB" "$WORK/model.json" >"$WORK/model_i.json" || die 4 "Building the Insights data failed"
+    # accounts in file names: up to 3 joined with _, else merged_<n>_accounts
+    FILE_TAG="$(jq -r '[.meta.accounts[]?.account | select(test("^[0-9]{12}$"))] | unique
+        | if length == 0 then "noaccount" elif length > 3 then "merged_\(length)_accounts" else join("_") end' "$WORK/model_i.json" | tr -d '\r')"
+    [[ "$FILE_TAG" =~ ^[A-Za-z0-9_]+$ ]] || die 4 "Bad account tag"
+    jq -c --arg tag "$FILE_TAG" '.meta.file_tag = $tag' "$WORK/model_i.json" >"$WORK/model.json" || die 4 "Building the Insights data failed"
+}
 file_stamp() { printf '%s' "$STAMP"; }
 write_csv() {   # write_csv <kind>: <prefix>_<kind>_<ts>.csv next to the HTML, same columns / escaping as the page export
-    local f; f="${OUTPUT_DIR%/}/${PREFIX}_$1_$(file_stamp).csv"
+    local f; f="${OUTPUT_DIR%/}/${PREFIX}_${FILE_TAG}_$(file_stamp)_$1.csv"
     jq -j --arg kind "$1" --arg eol "$CSV_EOL" -f "$CSV_LIB" "$WORK/model.json" >"$WORK/out_$1.csv" || die 4 "Building the $1 CSV failed"
     if ! { cp -- "$WORK/out_$1.csv" "$f.tmp.$$" && mv -f -- "$f.tmp.$$" "$f"; }; then die 4 "Cannot write $f"; fi
     chmod 0640 -- "$f" 2>/dev/null || true
@@ -435,7 +499,7 @@ write_csv() {   # write_csv <kind>: <prefix>_<kind>_<ts>.csv next to the HTML, s
 }
 unix_eol() { if (( JQ_CRLF )); then tr -d '\r'; else cat; fi; }   # jq.exe (Windows) writes CRLF: keep HTML/JSON LF-only
 write_data() {   # <prefix>_data_<ts>.json: the page's dataset + the raw describe-* output (input for --merge)
-    local f; f="${OUTPUT_DIR%/}/${PREFIX}_data_$(file_stamp).json"
+    local f; f="${OUTPUT_DIR%/}/${PREFIX}_${FILE_TAG}_$(file_stamp)_data.json"
     [[ -s "$WORK/scanned.jsonl" ]] || : >"$WORK/scanned.jsonl"
     [[ -s "$WORK/sources.json" ]] || printf 'null' >"$WORK/sources.json"
     jq -c --arg schema "$DATA_SCHEMA" --argjson sv "$DATA_SCHEMA_VERSION" --argjson merged "$MERGE" \
@@ -453,7 +517,7 @@ write_data() {   # <prefix>_data_<ts>.json: the page's dataset + the raw describ
 }
 write_html() {
     local stamp; stamp="$(file_stamp)"
-    OUTFILE="${OUTPUT_DIR%/}/${PREFIX}_${stamp}.html"
+    OUTFILE="${OUTPUT_DIR%/}/${PREFIX}_${FILE_TAG}_${stamp}.html"
     # embed the model as JSON inside <script type="application/json">: every "<" becomes \u003c, so no "</script"
     # (or "<!--") in any AWS value can end the block; JSON.parse turns it back into "<".
     jq -r --rawfile tpl "$TEMPLATE" '
@@ -475,7 +539,7 @@ dry_run_plan() {
     elif (( ALL_REGIONS )); then echo "  regions  : all enabled per account; every region read in full (--no-discover)"
     else echo "  regions  : ${REGIONS[*]:-profile default}"; fi
     echo "  docdb    : $( (( INCLUDE_DOCDB )) && echo included || echo skipped)"
-    echo "  output   : ${OUTPUT_DIR%/}/${PREFIX}_YYYYmmdd_HHMMSS.html"
+    echo "  output   : ${OUTPUT_DIR%/}/${PREFIX}_<account>_YYYYmmdd_HHMMSS.html"
     for p in "${PROFILES[@]}"; do
         r="${REGIONS[0]:-<region>}"
         echo "Profile ${p:-default}:"
@@ -499,6 +563,7 @@ dry_run_plan() {
 }
 
 # shellcheck disable=SC2317  # invoked via trap
+# shellcheck disable=SC2329  # invoked by trap
 on_exit() {
     local rc=$?
     trap - EXIT INT TERM
@@ -509,17 +574,18 @@ on_exit() {
     exit "$rc"
 }
 # shellcheck disable=SC2317
+# shellcheck disable=SC2329  # invoked by trap
 on_signal() { log_error "Interrupted"; exit 130; }
 
 write_outputs() {
-    write_html
-    if (( WRITE_CSV )); then write_csv inventory; write_csv pending; fi
+    if (( WRITE_HTML )); then write_html; fi
+    if (( WRITE_CSV )); then write_csv inventory; write_csv pending; write_csv insights_findings; fi
     if (( SAVE_DATA )); then write_data; fi
 }
-make_work() {   # private temp dir; no mktemp -p / flock / /proc needed
-    WORK="$(mktemp -d "${TMPDIR:-/tmp}/rds_explorer.XXXXXX" 2>/dev/null)" \
-        || { WORK="${TMPDIR:-/tmp}/rds_explorer.$$.$RANDOM"; mkdir -m 700 -- "$WORK" 2>/dev/null || mkdir -- "$WORK"; } \
-        || die 4 "Cannot create a temporary directory under ${TMPDIR:-/tmp}"
+make_work() {   # private (0700) temp dir from mktemp only: no predictable fallback name
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/rds_explorer.XXXXXX" 2>/dev/null)" && [[ -d "$WORK" ]] \
+        || die 4 "Cannot create a temporary directory under ${TMPDIR:-/tmp} (mktemp -d failed)"
+    chmod 700 -- "$WORK" 2>/dev/null || true
 }
 
 # ----------------------------------------------------------------------------
@@ -546,8 +612,8 @@ merge_files() {   # expand the --merge arguments (globs, directories) into MERGE
     for a in "${MERGE_ARGS[@]}"; do
         p="$(win_path "$a")"
         if [[ -d "$p" ]]; then
-            mapfile -t hits < <(compgen -G "${p%/}/*_data_*.json" | sort)
-            (( ${#hits[@]} )) || die 3 "No *_data_*.json file in directory: $a"
+            mapfile -t hits < <({ compgen -G "${p%/}/*_data.json"; compgen -G "${p%/}/*_data_*.json"; } | sort -u)
+            (( ${#hits[@]} )) || die 3 "No *_data.json file in directory: $a"
             MERGE_FILES+=("${hits[@]}")
         elif [[ -e "$p" ]]; then MERGE_FILES+=("$p")
         elif [[ "$p" == *[*?[]* ]]; then
@@ -567,11 +633,22 @@ check_data_file() {   # check_data_file <path>: schema 1 from --save-data, or di
         elif .schema != $s then "no-schema"
         elif (.schema_version | type) != "number" then "no-version"
         elif (.source.regions | type) != "array" or (.accounts | type) != "array" or (.generated_epoch | type) != "number" then "v\(.schema_version)-incomplete"
+        elif .schema_version != '"$DATA_SCHEMA_VERSION"' then "v\(.schema_version)"
+        # shape checks: every account a 12-digit id, every region block well-formed (no path parts, arrays of objects)
+        elif ([.accounts[] | (type == "object") and ((.account | type) == "string") and (.account | test("^[0-9]{12}$"))] | all | not) then "bad-account"
+        elif ([.source.regions[] | (type == "object") and ((.account | type) == "string") and (.account | test("^[0-9]{12}$"))
+               and ((.region | type) == "string") and (.region | test("^[a-z]{2}(-[a-z]+)+-[0-9]+$"))
+               and ([.clusters, .instances, .globals] | all(type == "array" and all(.[]; type == "object")))
+               and ([.endpoints, .pma, .certs] | all(. == null or (type == "array" and all(.[]; type == "object"))))] | all | not) then "bad-region"
+        elif ((.errors // []) | type) != "array" then "bad-errors"
         else "v\(.schema_version)" end' -- "$f" 2>/dev/null | tr -d '\r')" || st="bad-json"
     case "$st" in
         "v$DATA_SCHEMA_VERSION") return 0 ;;
         bad-json|"")  die 3 "$f is not valid JSON (truncated or not a --save-data file)" ;;
         not-object|no-schema) die 3 "$f is not an RDS Inventory Explorer data file (schema \"$DATA_SCHEMA\" expected; write one with --save-data)" ;;
+        bad-account)  die 3 "$f has an account that is not a 12-digit AWS account id - file rejected (damaged or edited?)" ;;
+        bad-region)   die 3 "$f has a region block with an unexpected shape (bad account / region name, or non-list data) - file rejected" ;;
+        bad-errors)   die 3 "$f has an unexpected errors list - file rejected" ;;
         no-version)   die 3 "$f has no schema_version - unsupported old format; re-run the script with --save-data" ;;
         *-incomplete) die 3 "$f is missing accounts / source data (schema ${st%-incomplete}); re-run the script with --save-data" ;;
         v*)           if (( ${st#v} < DATA_SCHEMA_VERSION )); then
@@ -615,6 +692,7 @@ merge_main() {
          regions: .regions, errors: .errors}' "$WORK/merged.json" >"$WORK/raw.json" || die 4 "Assembling the merged report failed"
     jq -c '.sources, .regions_scanned' "$WORK/merged.json" >"$WORK/sources.json"
     jq -c -f "$LIB" "$WORK/raw.json" >"$WORK/model.json" || die 4 "Building the data model failed"
+    add_insights
     write_outputs
     log_info "$(jq -r '.meta.counts | "Merged \(.accounts) account(s) from '"$i"' file(s): \(.global_clusters) global cluster(s), \(.clusters) cluster(s), \(.instances) instance(s) (\(.standalone_instances) standalone) in \(.regions_with_databases) region(s) with databases; \(.pending_actions) pending maintenance action(s) (\(.pending_past_due) past due, relative to merge time); \(.errors) error(s)"' "$WORK/model.json" | tr -d '\r'); 0 AWS calls"
     exit 0
@@ -623,7 +701,9 @@ merge_main() {
 main() {
     trap on_exit EXIT
     trap on_signal INT TERM
+    load_config "$@"
     parse_args "$@"
+    [[ -n "$CONFIG_FILE" ]] && log_debug "Config file: $CONFIG_FILE"
     validate
     NOW="$(date +%s)"
     [[ -n "${RDS_EXPLORER_NOW:-}" ]] && NOW="$RDS_EXPLORER_NOW"   # tests: fixed clock

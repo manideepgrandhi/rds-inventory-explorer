@@ -1,15 +1,28 @@
-# RDS_Inventory_Explorer
+# rds-inventory-explorer
 
 `rds_inventory_explorer.sh` is a **read-only** Bash / AWS CLI v2 script that writes **one self-contained HTML file** of your RDS and Aurora fleet across accounts (profiles) and regions. It covers Aurora global clusters, regional Aurora clusters and Multi-AZ DB clusters, and RDS instances (standalone, read replicas and cluster members). Open the file, type or pick a resource, and you see the full metadata for **that cluster or instance alone**.
 
 - One file, no server, no internet needed. The data is embedded in the page and nothing is loaded from the network (CSP `default-src 'none'`).
 - **No CloudWatch, no secret values.** Only `sts get-caller-identity`, `ec2 describe-regions` and `rds describe-*` calls are made. The script refuses anything else (`read_only_guard`). It shows the ARN of a managed master secret, never its value.
-- A **Pending maintenance** tab lists every pending action across the fleet, sorted by urgency, and both tabs export to **CSV**.
+- A **Pending maintenance** tab lists every pending action across the fleet, sorted by urgency.
+- An **Insights** tab summarises the fleet (engines, versions, classes, Multi-AZ, storage) and lists configuration findings (17 checks: public access, encryption, deletion protection, backups, monitoring and more). All three tabs export to **CSV**.
 - Errors in one account or region (AccessDenied, SCP, throttling, expired SSO) are recorded and shown in the page. They never stop the run.
 
 ![Cluster card](docs/screenshot.png)
 
+![Insights tab](docs/insights.png)
+
 A sample page built from the test mock is in [samples/sample.html](samples/sample.html). Download it and open it in a browser.
+
+## Install (CloudShell)
+
+```bash
+curl -fsSLO https://github.com/manideepgrandhi/rds-inventory-explorer/releases/latest/download/rds-inventory-explorer.zip && curl -fsSLO https://github.com/manideepgrandhi/rds-inventory-explorer/releases/latest/download/rds-inventory-explorer.zip.sha256
+sha256sum -c rds-inventory-explorer.zip.sha256 && unzip -oq rds-inventory-explorer.zip && cd rds-inventory-explorer
+./rds_inventory_explorer.sh -A -F html,csv --save-data -o ./out
+```
+
+`sha256sum -c` must print `rds-inventory-explorer.zip: OK`. If it reports `FAILED`, the `&&` chain stops before `unzip`; delete the zip and do not run it. The script uses the CloudShell login (or `-P` profiles) and only reads.
 
 ## Quick start
 
@@ -24,7 +37,7 @@ A sample page built from the test mock is in [samples/sample.html](samples/sampl
 ./rds_inventory_explorer.sh -P prod,dev -A --dry-run
 ```
 
-The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_explorer`) with mode 0640. Requirements: Bash 4.4+, AWS CLI v2 and jq.
+The output is `<prefix>_<accounts>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_explorer`; `<accounts>` is the 12-digit account ids joined with `_`, or `merged_N_accounts` for more than 3) with mode 0640. CSVs and the data file use the same stem: `…_inventory.csv`, `…_pending.csv`, `…_insights_findings.csv`, `…_data.json`. Requirements: Bash 4.4+, AWS CLI v2 and jq.
 
 ## How it works
 
@@ -43,7 +56,8 @@ The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_exp
    - Members are linked to their clusters, replicas to their sources, and pending actions and CA expiry to each resource.
    - Times are converted to UTC and the `--tz` zone (default Asia/Kolkata, IST).
    - DocumentDB and Neptune are dropped unless `--include-docdb` is given.
-5. **HTML:** the model is embedded as JSON into `lib/explorer_template.html`. `<`, U+2028 and U+2029 are escaped, so a tag value like `</script>` cannot break the page. The file is written atomically.
+5. **Insights:** `lib/insights.jq` adds the fleet facets and the findings to the model, so the page, `--csv` and `--merge` use one source.
+6. **HTML:** the model is embedded as JSON into `lib/explorer_template.html`. `<`, U+2028 and U+2029 are escaped, so a tag value like `</script>` cannot break the page. The file is written atomically.
 
 ## Using the page
 
@@ -53,7 +67,7 @@ The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_exp
   - Names inside the card (writer, members, global cluster, replica source, replicas) are links to their own cards.
   - The selection is kept in the URL hash, so it survives a reload and can be bookmarked. ← All resources goes back to the list.
   - **Copy JSON** copies the raw AWS describe output for that resource. **Copy ARN** copies its ARN.
-- **Tabs:** **Inventory** and **Pending maintenance**. The active tab is kept in the URL hash (`#tab=pending`). Old `#id=…` links still open the Inventory card.
+- **Tabs:** **Inventory**, **Pending maintenance** and **Insights**. The active tab is kept in the URL hash (`#tab=pending`, `#tab=insights`). Old `#id=…` links still open the Inventory card.
 - **Pending maintenance tab:** one row per pending action, from the same `describe-pending-maintenance-actions` data (no extra AWS calls).
   - Count strip: total, past due, due within 7 days, due within 30 days (cumulative). Clicking a count filters by it.
   - Columns: account, region, resource (links to its card), type (cluster / instance / member), action, description, auto-applied after, forced apply, opt-in status, current apply, next maintenance window start (UTC + IST), and urgency.
@@ -61,12 +75,45 @@ The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_exp
   - Filters for account, region, action and urgency, plus a text search. Every column header sorts (click again to reverse; empty values stay last).
   - Cards with pending actions show an **"N pending"** badge (a cluster counts its own and its members' actions). The list has a Pending column. Both jump to that resource's rows (`#tab=pending&res=…`); **Show all** drops the resource filter.
 - **Export CSV:** a button on each tab downloads what is shown, after filters and sorting.
-  - Pending: `rds_pending_maintenance_<YYYYmmdd_HHMMSS>.csv`, 19 columns (dates in UTC and the second zone, days until earliest, urgency, resource ARN).
-  - Inventory: `rds_inventory_<YYYYmmdd_HHMMSS>.csv`, one flat row per resource (account, profile, region, type, identifier, engine, version, class, status, endpoint, port, Multi-AZ, encryption, KMS key, backup retention, auto minor upgrade, maintenance window in both zones, pending counts, ARN), then one `tag:<key>` column per tag key.
+  - Pending: `<stem>_pending.csv`, 19 columns (dates in UTC and the second zone, days until earliest, urgency, resource ARN).
+  - Insights: `<stem>_insights_findings.csv` (severity, account, region, resource, type, engine, check, current value, fix hint).
+  - Inventory: `<stem>_inventory.csv`, one flat row per resource (account, profile, region, type, identifier, engine, version, class, status, endpoint, port, Multi-AZ, encryption, KMS key, backup retention, auto minor upgrade, maintenance window in both zones, pending counts, ARN), then one `tag:<key>` column per tag key.
   - The time stamp is the report's generation time. Files are UTF-8 with a BOM (Excel opens them correctly), RFC 4180 quoting and CRLF line ends. Cells starting with `=`, `+`, `-`, `@` or a tab get a leading `'` so spreadsheets do not run them as formulas (plain numbers such as `-3` are left alone).
 - **Header:** counts only. These are accounts, regions with databases, global clusters, clusters, instances (standalone and members), resources with pending maintenance, and errors. Regions without databases are never listed.
 - **Theme:** auto, light and dark. The choice is stored in `localStorage` under `mg-theme`, the same key the other reports in this repo use.
 - **Errors panel** at the bottom: account, profile, region, the call that failed and the message.
+
+## Insights tab
+
+Built only from the data already collected (no extra AWS calls). The account and region dropdowns scope everything on the tab.
+
+- **Totals:** databases (clusters + standalone instances), DB instances, approximate vCPUs, allocated GiB (non-Aurora), and High / Medium / Low findings.
+- **Bars** for engine, engine version, instance class, instance family, account, region, Multi-AZ and storage type. Click a value to open Inventory filtered to those resources; a chip shows the filter and **×** removes it. Class and family count instances (cluster members included); the others count databases.
+- **Per-account summary:** databases, resources with findings, High / Medium / Low, and clean databases (a cluster is clean only when it and every member have no finding).
+- **Findings table:** severity, account, region, resource (links to its card), check, current value and fix hint. Filters for account, region, check and severity; **Export CSV** downloads the rows shown.
+- Aurora is handled per level: encryption, deletion protection, backups, IAM auth, copy tags, log exports, port and master user are read from the cluster; public access, class, Enhanced Monitoring and CA from each member; auto minor upgrade and Performance Insights from the cluster when it carries the setting, otherwise from each member. A member's finding counts against its cluster in the per-account summary.
+
+| Check id | Severity | Finding |
+|---|---|---|
+| `public_access` | High | Publicly accessible |
+| `storage_not_encrypted` | High | Storage not encrypted |
+| `deletion_protection_off` | High | Deletion protection off |
+| `copy_tags_off` | Medium | Copy tags to snapshots off |
+| `single_az` | Medium | Single-AZ |
+| `backup_retention_low` | Medium | Backup retention < 7 days |
+| `iam_auth_off` | Medium | IAM DB authentication off |
+| `ca_expiring` | Medium | CA certificate expires < 90 days |
+| `auto_minor_off` | Low | Auto minor version upgrade off |
+| `pi_off` | Low | Performance Insights off |
+| `em_off` | Low | Enhanced Monitoring off |
+| `no_log_exports` | Low | No CloudWatch log exports |
+| `default_port` | Low | Default port |
+| `default_master_user` | Low | Default master username |
+| `old_generation` | Low | Previous-generation class |
+| `gp2_storage` | Low | gp2 storage |
+| `stopped` | Low | Stopped |
+
+`--skip-checks id,id` turns checks off (the tab lists what was skipped). Not checked: engine version in Extended Support, because `describe-db-*` only shows the enrollment setting, not whether the version is past standard support.
 
 ## What each card shows
 
@@ -88,21 +135,24 @@ The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_exp
 | `--include-docdb` | Also list DocumentDB and Neptune clusters. |
 | `-o, --output-dir DIR` | Output directory (default: the current directory). It is created if missing. |
 | `--prefix NAME` | File name prefix. |
-| `--csv` | Also write `<prefix>_inventory_<ts>.csv` and `<prefix>_pending_<ts>.csv` next to the HTML. They have the same columns and bytes as the page's Export CSV buttons with no filters applied. |
+| `-F, --format LIST` | `html`, `csv` or `html,csv` (default `html`). CSV writes `…_inventory.csv`, `…_pending.csv` and `…_insights_findings.csv`, byte-identical to the page's Export CSV buttons with no filters. |
+| `--csv` | Same as `-F html,csv`. |
+| `--skip-checks LIST` | Insights check ids to skip (see the table above). |
+| `-c, --config FILE` | key=value settings (long option names; never sourced). Command-line options override it. See `rds_inventory_explorer.conf.example`. |
 | `--tz ZONE` | Second time zone shown next to UTC (default `Asia/Kolkata`). |
 | `--aws-timeout SEC` / `--max-attempts N` | CLI connect/read timeout (default 30) and retry attempts (default 5). |
 | `--keep-workdir` | Keep the raw AWS responses for debugging. |
 | `--dry-run` | Print the calls that would run, and call nothing. |
-| `--save-data` | Also write `<prefix>_data_<ts>.json`: the page's dataset plus the raw describe output, with the schema version, script version, generation time, accounts and the regions scanned. This is the input for `--merge`. |
-| `--merge FILE...` | Build one report from saved data files, with no AWS calls and no credentials (see below). Takes files, globs or folders. Works with `-o`, `--prefix`, `--csv`, `--save-data` and `--tz`. |
-| `-v`, `-h`, `-V` | Verbose, help, version (1.2.0). |
+| `--save-data` | Also write `<stem>_data.json`: the page's dataset plus the raw describe output, with the schema version, script version, generation time, accounts and the regions scanned. This is the input for `--merge`. |
+| `--merge FILE\|DIR...` | Build one report from saved data files, with no AWS calls and no credentials (see below). Takes files, globs or folders. Works with `-o`, `--prefix`, `-F`, `--skip-checks`, `--save-data` and `--tz`. |
+| `-v`, `-h`, `-V` | Verbose, help, version (2.0.0). |
 
 **Exit codes:**
 
 - `0`: the report was written. It may contain recorded errors.
 - `1`: usage error.
 - `2`: pre-check failed (aws or jq missing, or no profile has valid credentials).
-- `3`: bad `--merge` input (file not found, not JSON, an HTML report, or an old or unknown data schema).
+- `3`: bad `--merge` input (file not found, not JSON, an HTML report, an old or unknown data schema, or an unexpected shape: an account that is not 12 digits, a bad region name, non-list data).
 - `4`: output error.
 - `130`: interrupted.
 
@@ -114,27 +164,27 @@ You do not need to copy files between accounts. Run the script in each account's
 
    ```bash
    ./rds_inventory_explorer.sh -A --save-data -o ~/rds_out
-   ls ~/rds_out      # rds_inventory_explorer_data_<ts>.json is the file to download
+   ls ~/rds_out      # rds_inventory_explorer_<account>_<ts>_data.json is the file to download
    ```
 
-2. Download it: **Actions → Download file**, then enter the full path, for example `/home/cloudshell-user/rds_out/rds_inventory_explorer_data_20261017_063000.json`. Put the files from every account in one folder, for example `C:\Users\<you>\Downloads\rds`.
+2. Download it: **Actions → Download file**, then enter the full path, for example `/home/cloudshell-user/rds_out/rds_inventory_explorer_111111111111_20261017_120000_data.json`. Put the files from every account in one folder, for example `C:\Users\<you>\Downloads\rds`.
 3. Install jq once: run `winget install jqlang.jq` in PowerShell, then reopen Git Bash and check with `jq --version` (1.6 or later).
 4. In Git Bash, from the folder that holds the script and its `lib/` folder:
 
    ```bash
-   ./rds_inventory_explorer.sh --merge ~/Downloads/rds/*_data_*.json --csv -o ~/Downloads/rds/merged
+   ./rds_inventory_explorer.sh --merge ~/Downloads/rds/*_data.json -F html,csv -o ~/Downloads/rds/merged
    # a folder works too, as do Windows paths in quotes:
-   ./rds_inventory_explorer.sh --merge "C:\Users\<you>\Downloads\rds" --csv
+   ./rds_inventory_explorer.sh --merge "C:\Users\<you>\Downloads\rds" -F html,csv
    start ~/Downloads/rds/merged/rds_inventory_explorer_*.html
    ```
 
 How the merge works:
 
-- The page is rebuilt from the raw data in each file, so it has the same tabs, filters, cards and Export CSV buttons as a normal report. `--csv` writes the two CSVs, and `--save-data` writes the merged data file, which you can merge again later.
+- The page is rebuilt from the raw data in each file, so it has the same tabs (Insights included), filters, cards and Export CSV buttons as a normal report. `-F html,csv` writes the three CSVs, and `--save-data` writes the merged data file, which you can merge again later.
 - **Urgency is relative to the merge time.** Days left, past due and the 7 / 30 day counts on the Pending tab are worked out at the time you merge, not at the time each file was collected. The header says "Merged" and lists every source file with its collection time.
 - If two files hold the same account, the file collected later is used and the older one is ignored. The log says which file won, and the header marks the ignored one.
 - The header shows counts only, never lists of region names.
-- A file that is not a data file stops the merge with exit code 3 and says why. Examples are an HTML report instead of the `_data_` JSON, a damaged download, or a file from an older script version.
+- A file that is not a data file stops the merge with exit code 3 and says why. Examples are an HTML report instead of the `_data.json` file, a damaged download, or a file from an older script version.
 - Requirements: Bash 4.4 or later (Git for Windows ships 5.x) and jq. The script copes with jq.exe's CRLF output, `C:\` and `/c/` paths, paths with spaces, and a `date` without `-d`.
 
 ## IAM permissions
@@ -178,6 +228,7 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
   - It runs the failure scenarios (throttled global clusters, empty fleet, no valid profile), the dry run (no calls), and a 1,950-resource scale run.
   - When `node` with `puppeteer-core` on `NODE_PATH` and Chrome are available, it also runs `tests/browser_check.js`. That drives the page in headless Chrome: search suggestions, filters, the card, links, the hash, Copy JSON, the theme, the Pending tab (hash, filters, search, sort, count strip, badge navigation, empty state), CSV export (the downloaded bytes are compared with the `--csv` files, plus one real Chrome download), layout at 680 / 900 / 1280 px and mobile dark, and no JS errors or network requests.
   - It checks `--save-data` and `--merge`: the data file round trip, a merge of three files where one account appears twice (the newer file wins and the log says so), and that the merged model and CSVs match a single scan. It also checks that urgency is recomputed at merge time, that bad, HTML, old-schema, newer-schema and partial files fail with exit code 3, and that the merge makes 0 AWS calls. The merge runs in a simulated Git Bash: no `aws` on PATH, a jq that writes CRLF, a `date` without `-d`, `C:\` and `/c/` paths, and spaces in paths. The browser check is run again on the merged page.
+  - **Insights:** an audit fleet (`MOCK_AUDIT=1`) where every one of the 17 checks fires, `--skip-checks` (valid and unknown ids), `-F` (html,csv / csv / bad), the findings CSV, the config file (and that it is never executed), mode 0640, and rejected merge files (bad account, path-like region, non-list data, bad errors). `tests/insights_check.js` drives the tab: totals, bars, filters, CSV export equal to the script CSV, facet click to a filtered Inventory with its chip, mobile width, no JS errors, no network. A tampered merge with `<img onerror>` and `</script>` in a name is rendered to prove nothing executes.
   - It checks the `--csv` files: names, mode 640, BOM, CRLF, quoting, the formula guard, and that header and values match the model (Python's `csv` module as the parser).
 - **`validate_cli.sh`** replays every command line the script issues through the real CLI, so syntax, `--query` and parameter validation are checked. It also runs negative controls, checks the mock output shapes against `--generate-cli-skeleton output`, and runs a full `-A` end to end through `tests/fake_aws_endpoint.py`. That run checks paging, that the probe skips the empty region, and that no CloudWatch, Secrets Manager or KMS request is made.
 
@@ -186,10 +237,27 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
 ```
 rds_inventory_explorer.sh        the script
 lib/explorer.jq                  raw AWS JSON -> page model
-lib/csv.jq                       page model -> CSV (used by --csv)
+lib/insights.jq                  fleet facets + findings (Insights tab, findings CSV)
+lib/csv.jq                       page model -> CSV (used by -F csv)
 lib/merge.jq                     saved data files -> one dataset (used by --merge)
 lib/explorer_template.html       page (CSS + JS), data placeholder /*__EXPLORER_DATA__*/
+rds_inventory_explorer.conf.example  settings file example
+EXAMPLES.md                      command examples
 samples/sample.html              page built from the test mock (fake accounts)
 docs/screenshot.png              cluster card from the sample
-tests/                           run_tests.sh, validate_cli.sh, browser_check.js, fake_aws_endpoint.py, mock/aws
+docs/insights.png                Insights tab from the sample
+tests/                           run_tests.sh, validate_cli.sh, browser_check.js, insights_check.js, fake_aws_endpoint.py, mock/aws
 ```
+
+## Changelog
+
+- **2.0.0**
+  - Moved to its own repository (`manideepgrandhi/rds-inventory-explorer`) with a release zip and `.sha256` checksum, built by a workflow pinned to a commit SHA.
+  - **Insights tab:** fleet totals, CSS bars (no inline scripts or styles; CSP stays `default-src 'none'`), click-through to a filtered Inventory, per-account summary, findings table with filters and CSV export. 17 checks in `lib/insights.jq`, Aurora-aware.
+  - `-F/--format html,csv`, `--skip-checks`, `-c/--config FILE` (never sourced).
+  - File names carry the account ids: `<prefix>_<accounts>_<ts>.html`, `…_inventory.csv`, `…_pending.csv`, `…_insights_findings.csv`, `…_data.json`. `--merge DIR` reads both the new and the 1.2 data file names.
+  - `--merge` rejects files with unexpected shapes (accounts that are not 12 digits, bad region names, non-list data).
+  - The ARN row is gone from the instance card (Copy ARN stays).
+- **1.2.0** - `--save-data` and offline `--merge` (Git Bash friendly), merged header.
+- **1.1.0** - Pending maintenance tab, CSV export (page and `--csv`).
+- **1.0.0** - Single-file offline HTML explorer for Aurora global clusters, Aurora / Multi-AZ clusters and RDS instances across profiles and regions.

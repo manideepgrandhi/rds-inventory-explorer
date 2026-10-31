@@ -55,7 +55,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 1\.2\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.0\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -72,7 +72,7 @@ echo "== fleet: 2 accounts + 1 broken profile, all regions with discovery"
 : >"$MOCK_LOG"
 t fleet 0 fleet "${FLEET[@]}"
 F="$(find "$OUT/fleet" -name '*.html')"
-chk "file name <prefix>_YYYYmmdd_HHMMSS.html" test "${F##*/}" == "rds_inventory_explorer_20261017_063000.html"
+chk "file name <prefix>_YYYYmmdd_HHMMSS.html" test "${F##*/}" == "rds_inventory_explorer_111111111111_222222222222_20261017_063000.html"
 chk "file mode 0640" test "$(stat -c %a "$F")" == 640
 jqt fleet '.meta.counts == {accounts: 2, regions_with_databases: 3, global_clusters: 1, clusters: 4, instances: 14, standalone_instances: 5, cluster_members: 9, pending_maintenance: 5, pending_actions: 5, pending_past_due: 1, pending_due_7d: 1, pending_due_30d: 2, errors: 7}'
 jqt fleet '.meta.generated_utc == "2026-10-17 06:30 UTC" and .meta.generated_local == "2026-10-17 12:00 IST" and .meta.tz_offset == 19800'
@@ -142,7 +142,7 @@ jqt docdb '.meta.counts.clusters == 4 and .meta.counts.instances == 12 and ([.re
 rt docdb catalog-docdb '.type_label == "DocumentDB cluster"'
 t tzutc 0 fleet -P prod -r us-east-1 --tz UTC --prefix myrds
 jqt tzutc '.meta.generated_local == "2026-10-17 06:30 UTC" and ([.resources[] | .d.maintenance_window.local // empty] | all(endswith("UTC")))'
-chk "--prefix used" test -f "$OUT/tzutc/myrds_20261017_063000.html"
+chk "--prefix used" test -f "$OUT/tzutc/myrds_111111111111_20261017_063000.html"
 : >"$MOCK_LOG"
 t explicit 0 fleet -P prod -r us-east-1
 chk "explicit region: no probe, no describe-regions" bash -c "! calls() { jq -r 'join(\" \")' '$MOCK_LOG'; }; ! calls | grep -qE -- '--no-paginate|describe-regions'"
@@ -166,7 +166,7 @@ t globalfail 0 globalfail -P prod -r us-east-1
 jqt globalfail '.meta.counts.global_clusters == 0 and .meta.counts.clusters == 3 and ([.errors[] | select(.call == "rds describe-global-clusters")][0].message | test("Throttling"))'
 t empty 0 empty -P prod -A --csv
 jqt empty '.pending == [] and .meta.counts.pending_actions == 0'
-EP="$(find "$OUT/empty" -name '*_pending_*.csv' | head -1)"
+EP="$(find "$OUT/empty" -name '*_pending.csv' | head -1)"
 chk "empty fleet --csv: pending CSV is BOM + header only" bash -c "[[ -n '$EP' ]] && test \"\$(wc -l <'$EP')\" -eq 1 && head -c3 '$EP' | od -An -tx1 | grep -q 'ef bb bf'"
 jqt empty '.resources == [] and .meta.counts.regions_with_databases == 0'
 chk "empty fleet: no region listed in page" bash -c "! grep -qE 'us-east-1|ap-south-1|eu-west-1' '$(find "$OUT/empty" -name '*.html' 2>/dev/null | head -1)'"
@@ -184,11 +184,11 @@ jqt fleet '[.resources[] | .csv | length] | unique == [21]'
 
 echo "== --csv"
 t csv 0 fleet "${FLEET[@]}" --csv
-CI="$OUT/csv/rds_inventory_explorer_inventory_20261017_063000.csv" CP="$OUT/csv/rds_inventory_explorer_pending_20261017_063000.csv"
+CI="$OUT/csv/rds_inventory_explorer_111111111111_222222222222_20261017_063000_inventory.csv" CP="$OUT/csv/rds_inventory_explorer_111111111111_222222222222_20261017_063000_pending.csv"
 chk "--csv wrote inventory + pending files" test -s "$CI" -a -s "$CP"
 chk "no CSV without --csv" test -z "$(find "$OUT/fleet" -name '*.csv')"
 chk "CSV files are mode 640" test "$(stat -c %a "$CI") $(stat -c %a "$CP")" == "640 640"
-has csv err "Wrote .*_pending_20261017_063000\.csv"; has csv err "5 pending maintenance action\(s\) \(1 past due\)"
+has csv err "Wrote .*_20261017_063000_pending\.csv"; has csv err "5 pending maintenance action\(s\) \(1 past due\)"
 for f in "$CI" "$CP"; do
     chk "$(basename "$f"): UTF-8 BOM" bash -c "head -c3 '$f' | od -An -tx1 | grep -q 'ef bb bf'"
     chk "$(basename "$f"): every line ends CRLF" bash -c "test \"\$(grep -c \$'\\r\$' '$f')\" -eq \"\$(wc -l <'$f')\""
@@ -222,12 +222,12 @@ chk "pending CSV: header, shape and values match the model" csvcheck pending "$C
 echo "== --save-data / --merge"
 : >"$MOCK_LOG"
 t sd 0 fleet "${FLEET[@]}" --save-data --csv
-SD="$OUT/sd/rds_inventory_explorer_data_20261017_063000.json"
+SD="$OUT/sd/rds_inventory_explorer_111111111111_222222222222_20261017_063000_data.json"
 chk "data file written next to the HTML" test -s "$SD"
 chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
-chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data_*' 2>/dev/null)"
+chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data*' 2>/dev/null)"
 dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
-dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "1.2.0" and .merged == false'
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.0.0" and .merged == false'
 dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
 dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
 dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
@@ -239,11 +239,11 @@ chk "--save-data leaves the HTML model unchanged" test "$(jq -cS 'del(.meta.gene
 MD="$OUT/dl dir/Mani Deep"; mkdir -p "$MD" "$OUT/root/c/Users/Mani Deep/Downloads"
 t sdA 0 fleet -P prod -A --save-data
 RDS_EXPLORER_NOW=1792222200 t sdB 0 fleet -P nonprod,broken -A --save-data
-cp "$OUT"/sdA/*_data_*.json "$OUT/root/c/Users/Mani Deep/Downloads/"
-cp "$OUT"/sdB/*_data_*.json "$MD/"
+cp "$OUT"/sdA/*_data.json "$OUT/root/c/Users/Mani Deep/Downloads/"
+cp "$OUT"/sdB/*_data.json "$MD/"
 # an older prod download with stale contents: must lose to the newer prod file whatever the order
 jq '.generated_epoch -= 86400 | .accounts[].collected_epoch -= 86400 | .generated_utc = "2026-10-16 06:30 UTC"
-    | .source.regions |= (map(tostring | gsub("hr-sqlserver"; "hr-sqlserver-OLD") | fromjson))' "$OUT"/sdA/*_data_*.json >"$MD/old prod_data_20261016.json"
+    | .source.regions |= (map(tostring | gsub("hr-sqlserver"; "hr-sqlserver-OLD") | fromjson))' "$OUT"/sdA/*_data.json >"$MD/old prod_data_20261016.json"
 dfiles=("$MD"/*.json "$OUT/root/c/Users/Mani Deep/Downloads"/*.json); chk "prepared 3 data files (2 prod, 1 nonprod)" test "${#dfiles[@]}" == 3
 mcalls_before="$(wc -l <"$MOCK_LOG")"
 
@@ -266,23 +266,23 @@ gbm() {  # gbm <name> <expected-rc> [args...]   merge under the Git Bash simulat
     [[ -n "$h" ]] && sed -n 's|.*<script type="application/json" id="explorer-data">\(.*\)</script>.*|\1|p' "$h" >"$OUT/$name.json"
     return 0
 }
-gbm mg 0 --merge 'C:\Users\Mani Deep\Downloads\rds_inventory_explorer_data_*.json' "$MD/"*.json --csv --save-data
+gbm mg 0 --merge 'C:\Users\Mani Deep\Downloads\rds_inventory_explorer_*_data.json' "$MD/"*.json --csv --save-data
 chk "merge made 0 AWS calls" test "$(wc -l <"$MOCK_LOG")" == "$mcalls_before"
 has mg err "Input [0-9]: .*old prod_data_20261016\.json"
-has mg err "Account 111111111111: using newer rds_inventory_explorer_data_20261017_063000\.json .*ignoring older old prod_data_20261016\.json"
+has mg err "Account 111111111111: using newer rds_inventory_explorer_111111111111_20261017_063000_data\.json .*ignoring older old prod_data_20261016\.json"
 has mg err "Merged 2 account\(s\) from 3 file\(s\).*relative to merge time.*0 AWS calls"
 jqt mg '.meta.merge.files == 3 and .meta.aws_calls == 0 and .meta.region_mode == "merge" and .meta.counts.accounts == 2'
 jqt mg '[.resources[].name] | index("hr-sqlserver-OLD") == null and index("hr-sqlserver") != null'
 jqt mg '[.meta.merge.sources[] | select(.superseded == ["111111111111"])] | length == 1 and .[0].file == "old prod_data_20261016.json"'
 chk "merged model == single fleet run (resources, pending, errors, counts)" test \
     "$(jq -cS '[.resources, .pending, (.errors | sort), .meta.counts]' "$OUT/mg.json")" == "$(jq -cS '[.resources, .pending, (.errors | sort), .meta.counts]' "$OUT/sd.json")"
-for k in inventory pending; do
-    chk "merged $k CSV (CRLF jq) is byte-identical to the scan's" cmp -s "$OUT/mg out/rds_inventory_explorer_${k}_20261017_063000.csv" "$OUT/sd/rds_inventory_explorer_${k}_20261017_063000.csv"
+for k in inventory pending insights_findings; do
+    chk "merged $k CSV (CRLF jq) is byte-identical to the scan's" cmp -s "$OUT/mg out/rds_inventory_explorer_111111111111_222222222222_20261017_063000_${k}.csv" "$OUT/sd/rds_inventory_explorer_111111111111_222222222222_20261017_063000_${k}.csv"
 done
 chk "merged CSVs have no doubled CR" bash -c "! grep -q \$'\\r\\r' '$OUT/mg out/'*.csv"
 chk "merged HTML: empty region eu-west-1 never appears" bash -c "! grep -q eu-west-1 '$OUT/mg out/'*.html"
 chk "merged HTML: no CR characters" bash -c "! grep -q \$'\\r' '$OUT/mg out/'*.html"
-MGD="$OUT/mg out/rds_inventory_explorer_data_20261017_063000.json"
+MGD="$OUT/mg out/rds_inventory_explorer_111111111111_222222222222_20261017_063000_data.json"
 chk "merged --save-data: valid merged data file" jq -e >/dev/null '.merged == true and (.accounts|length) == 2 and (.sources|length) == 3 and any(.regions_scanned[]; .region == "eu-west-1")' "$MGD"
 gbm mg2 0 --merge "$MGD"
 chk "re-merging the merged data file gives the same model" test \
@@ -311,6 +311,54 @@ gbm mmix 3 --merge "$SD" "$OUT/bad.json"
 chk "bad merge input writes no report" test -z "$(find "$OUT/mbad out" "$OUT/mmix out" -name '*.html' 2>/dev/null)"
 t mP 1 fleet --merge "$SD" -P prod;  has mP err "--merge"
 t mnone 1 fleet --merge;              has mnone err "--merge"
+
+echo "== insights"
+export MOCK_AUDIT=1
+t aud 0 fleet "${FLEET[@]}" -F html,csv --save-data
+AUD="$(find "$OUT/aud" -name '*.html' | head -1)"; AUDF="$(find "$OUT/aud" -name '*_insights_findings.csv' | head -1)"
+chk "file names carry the account tag" test -n "$(find "$OUT/aud" -name 'rds_inventory_explorer_111111111111_222222222222_20261017_063000*' | head -1)"
+chk "-F html,csv writes html + 3 CSVs + data" test "$(find "$OUT/aud" -type f | wc -l)" -eq 5
+read -ra CIDS <<<"$(sed -n 's/^readonly CHECK_IDS="\(.*\)"/\1/p' "$SCRIPT")"
+for c in "${CIDS[@]}"; do jqt aud "[.insights.findings[] | select(.check == \"$c\")] | length > 0"; done
+jqt aud '.insights.findings | all(.unit_id != null and (.account | test("^[0-9]{12}$")))'
+jqt aud '[.resources[] | select(.name == "legacy-apg-1") | .ins.unit] == [false]'
+chk "findings CSV header" bash -c "head -1 '$AUDF' | tr -d '\r\357\273\277' | grep -qx 'Severity,Account,Region,Resource,Resource type,Engine,Check,Current value,Fix hint'"
+chk "findings CSV rows == findings" test "$(($(wc -l <"$AUDF") - 1))" -eq "$(jq '.insights.findings | length' "$OUT/aud.json")"
+chk "findings CSV is CRLF" bash -c "head -1 '$AUDF' | grep -q \$'\r\$'"
+chk "outputs are mode 0640" bash -c "! find '$OUT/aud' -type f ! -perm 0640 | grep -q ."
+t skip1 0 fleet "${FLEET[@]}" --skip-checks default_port,gp2_storage
+jqt skip1 '[.insights.findings[] | select(.check == "default_port" or .check == "gp2_storage")] | length == 0'
+jqt skip1 '[.insights.checks[] | select(.skipped) | .id] == ["default_port", "gp2_storage"]'
+t skipbad 1 fleet "${FLEET[@]}" --skip-checks nope; has skipbad err "Unknown check 'nope'"
+t fmtbad 1 fleet "${FLEET[@]}" -F html,pdf; has fmtbad err "pdf"
+t fmtcsv 0 fleet "${FLEET[@]}" -F csv
+chk "-F csv writes only CSVs" test -z "$(find "$OUT/fmtcsv" -name '*.html')" -a -n "$(find "$OUT/fmtcsv" -name '*_insights_findings.csv')"
+printf '# test\nprofile = prod\nall_regions = yes\nskip-checks = stopped\nformat=html\n' >"$OUT/t.conf"
+t conf 0 fleet -c "$OUT/t.conf"
+jqt conf '(.meta.accounts | length == 1) and ([.insights.checks[] | select(.skipped) | .id] == ["stopped"])'
+printf 'profile = prod\n$(touch %s/pwned)\nbogus = 1\n' "$OUT" >"$OUT/bad.conf"
+t confbad 1 fleet -c "$OUT/bad.conf"; chk "config file is never executed" test ! -e "$OUT/pwned"
+# formula guard: a tag / name starting with = must be quoted with a leading '
+chk "script CSVs: no cell starts with = + - @" bash -c "! grep -hE '(^|,)\"?[=+@-][A-Za-z(]' '$OUT/aud/'*.csv"
+# hostile merge input
+AD="$(find "$OUT/aud" -name '*_data.json' | head -1)"
+jq '.source.regions[0].instances[0].DBInstanceIdentifier = "x<img src=x onerror=window.__pwned=1></script><script>window.__pwned=1</script>\u2028=cmd|x"' "$AD" >"$OUT/xss_data.json"
+t xssm 0 fleet --merge "$OUT/xss_data.json"
+XH="$(find "$OUT/xssm" -name '*.html' | head -1)"
+chk "tampered merge: no raw </script> or <img in page" bash -c "[ \"\$(grep -o '</script>' '$XH' | wc -l)\" -eq 3 ] && ! grep -q '<img' '$XH'"
+chk "tampered merge: U+2028 escaped" bash -c "! grep -q \$'\u2028' '$XH'"
+chk "tampered merge: CSV formula-guarded" bash -c "! grep -hE '(^|,)\"?=cmd' '$OUT/xssm/'*.csv 2>/dev/null"
+jq '.accounts[0].account = "../../etc"' "$AD" >"$OUT/badacct.json"; t mbadacct 3 fleet --merge "$OUT/badacct.json"; has mbadacct err "12-digit"
+jq '.source.regions[0].region = "../x"' "$AD" >"$OUT/badreg.json"; t mbadreg 3 fleet --merge "$OUT/badreg.json"; has mbadreg err "unexpected shape"
+jq '.source.regions[0].instances = "nope"' "$AD" >"$OUT/badlist.json"; t mbadlist 3 fleet --merge "$OUT/badlist.json"; has mbadlist err "non-list"
+jq '.errors = {}' "$AD" >"$OUT/baderr.json"; t mbaderr 3 fleet --merge "$OUT/baderr.json"; has mbaderr err "errors list"
+unset MOCK_AUDIT
+if command -v node >/dev/null 2>&1 && node -e "require('puppeteer-core')" 2>/dev/null && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]]; then
+    res="$(ALL_CHECKS=1 node "$HERE/insights_check.js" "$AUD" "$OUT/aud" ${SHOTS_INS:+"$SHOTS_INS"} 2>&1)"; rc=$?
+    (( rc == 0 )) && ok "insights browser: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "insights browser: ${res:0:800}"
+    res="$(XSS=1 node "$HERE/insights_check.js" "$XH" 2>&1)"; rc=$?
+    (( rc == 0 )) && ok "tampered-merge XSS page: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "xss browser: ${res:0:800}"
+else echo "  skip insights browser check"; fi
 
 echo "== browser (headless Chrome)"
 if command -v node >/dev/null 2>&1 && node -e "require('puppeteer-core')" 2>/dev/null && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]]; then

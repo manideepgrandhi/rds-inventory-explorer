@@ -126,10 +126,10 @@ def inst(ident, engine, ver, cls="db.r6g.large", cluster=None, az="a", tg=None, 
          "DBParameterGroups": [{"DBParameterGroupName": kw.get("pg", "default.%s" % engine), "ParameterApplyStatus": "in-sync"}],
          "AvailabilityZone": REGION + az, "DBSubnetGroup": subnet(), "PreferredMaintenanceWindow": kw.get("mw", "sun:22:00-sun:22:30"),
          "MultiAZ": kw.get("maz", False), "AutoMinorVersionUpgrade": kw.get("auto", True), "PubliclyAccessible": kw.get("public", False),
-         "StorageType": kw.get("st", "aurora" if cluster else "gp3"), "StorageEncrypted": True, "KmsKeyId": kms(),
+         "StorageType": kw.get("st", "aurora" if cluster else "gp3"), "StorageEncrypted": kw.get("enc", True), "KmsKeyId": kms(),
          "DbiResourceId": "db-" + ident.upper().replace("-", "")[:20], "CACertificateIdentifier": kw.get("ca", "rds-ca-rsa2048-g1"),
          "CertificateDetails": {"CAIdentifier": kw.get("ca", "rds-ca-rsa2048-g1"), "ValidTill": t(kw.get("cadays", 3000))},
-         "CopyTagsToSnapshot": True, "MonitoringInterval": 60, "DBInstanceArn": arn("db", ident),
+         "CopyTagsToSnapshot": kw.get("ctag", True), "MonitoringInterval": kw.get("mon", 60), "DBInstanceArn": arn("db", ident),
          "IAMDatabaseAuthenticationEnabled": kw.get("iam", False), "PerformanceInsightsEnabled": kw.get("pi", True), "DeletionProtection": kw.get("dp", True),
          "TagList": tg or [], "LicenseModel": kw.get("lic", "postgresql-license"), "NetworkType": "IPV4", "EngineLifecycleSupport": "open-source-rds-extended-support",
          "OptionGroupMemberships": [{"OptionGroupName": "default:%s" % engine, "Status": "in-sync"}], "DbInstancePort": 0}
@@ -157,13 +157,13 @@ def inst(ident, engine, ver, cls="db.r6g.large", cluster=None, az="a", tg=None, 
 def cluster(ident, engine, ver, members, tg=None, **kw):
     port = 3306 if "mysql" in engine else 5432
     d = {"DBClusterIdentifier": ident, "DBClusterArn": arn("cluster", ident), "Engine": engine, "EngineVersion": ver, "EngineMode": "provisioned",
-         "Status": "available", "Endpoint": "%s.cluster-cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION),
+         "Status": kw.get("status", "available"), "Endpoint": "%s.cluster-cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION),
          "ReaderEndpoint": "%s.cluster-ro-cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION), "Port": port, "MultiAZ": len(members) > 1,
          "AvailabilityZones": [REGION + z for z in "abc"], "BackupRetentionPeriod": kw.get("ret", 14), "PreferredBackupWindow": "19:00-19:30",
          "PreferredMaintenanceWindow": kw.get("mw", "sat:21:00-sat:21:30"), "EarliestRestorableTime": t(-kw.get("ret", 14)), "LatestRestorableTime": t(-0.003),
-         "CopyTagsToSnapshot": True, "DBClusterParameterGroup": kw.get("cpg", "%s-custom" % engine), "DBSubnetGroup": "db-private",
+         "CopyTagsToSnapshot": kw.get("ctag", True), "DBClusterParameterGroup": kw.get("cpg", "%s-custom" % engine), "DBSubnetGroup": "db-private",
          "VpcSecurityGroups": [{"VpcSecurityGroupId": "sg-0db0000000000002", "Status": "active"}], "IAMDatabaseAuthenticationEnabled": kw.get("iam", True),
-         "DeletionProtection": kw.get("dp", True), "StorageEncrypted": True, "KmsKeyId": kms(), "DbClusterResourceId": "cluster-" + ident.upper().replace("-", "")[:20],
+         "DeletionProtection": kw.get("dp", True), "StorageEncrypted": kw.get("enc", True), "KmsKeyId": kms(), "DbClusterResourceId": "cluster-" + ident.upper().replace("-", "")[:20],
          "ClusterCreateTime": t(-500), "DBClusterMembers": [{"DBInstanceIdentifier": m, "IsClusterWriter": w, "DBClusterParameterGroupStatus": "in-sync", "PromotionTier": k}
                                                          for k, (m, w) in enumerate(members)],
          "TagList": tg or [], "StorageType": kw.get("st", "aurora"), "EngineLifecycleSupport": "open-source-rds-extended-support", "NetworkType": "IPV4"}
@@ -253,6 +253,13 @@ elif SCEN != "empty":
         INS.append(inst("qa-mysql", "mysql", "8.0.40", "db.t4g.medium", tg=tags("qa", "qa-team", "orders</script><b>x"), public=True, gb=50, st="gp3",
                         lic="general-public-license", dp=False, ret=1, port=3306))
         INS[-1]["TagList"].append({"Key": "cost-center", "Value": "=HYPERLINK(\"http://x\")"})   # CSV formula-injection probe
+        # Insights audit probes (MOCK_AUDIT=1): a stopped, unencrypted previous-generation instance and a stopped unencrypted Aurora cluster
+        if os.environ.get("MOCK_AUDIT") == "1":
+          INS.append(inst("legacy-pg", "postgres", "11.22", "db.m4.large", tg=tags("dev", "legacy", "legacy"), status="stopped", enc=False, ctag=False,
+                        mon=0, master="postgres", gb=100, st="gp2", lic="postgresql-license"))
+          CL.append(cluster("legacy-apg", "aurora-postgresql", "13.18", [("legacy-apg-1", True)], tg=tags("dev", "legacy", "legacy"), status="stopped",
+                          enc=False, ctag=False, user="postgres", ret=3, iam=False))
+          INS.append(inst("legacy-apg-1", "aurora-postgresql", "13.18", "db.r4.large", cluster="legacy-apg", status="stopped", enc=False, mon=0, pi=False))
         PMA += [{"ResourceIdentifier": arn("db", "qa-mysql"), "PendingMaintenanceActionDetails": [   # no date at all
                     {"Action": "db-upgrade", "Description": "Upgrade to MySQL 8.0.42"}]}]
 

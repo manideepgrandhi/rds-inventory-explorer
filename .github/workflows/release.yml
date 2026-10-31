@@ -1,0 +1,50 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build the release for, e.g. v1.0.0'
+        required: true
+# least privilege: read-only by default, write only for the job that publishes
+permissions:
+  contents: read
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # pinned to a full commit SHA (tags are mutable); bump SHA and comment together
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Build rds-inventory-explorer.zip (runtime files only)
+        run: |
+          set -euo pipefail
+          D=dist/rds-inventory-explorer; mkdir -p "$D"
+          # runtime only: no docs/, samples/, tests/, .github/
+          for f in rds_inventory_explorer.sh lib README.md \
+                   rds_inventory_explorer.conf.example EXAMPLES.md LICENSE; do
+            [ -e "$f" ] && cp -a "$f" "$D/"
+          done
+          chmod +x "$D"/*.sh
+          cd dist && zip -rqX rds-inventory-explorer.zip rds-inventory-explorer
+          unzip -Z rds-inventory-explorer.zip
+          ! unzip -Z1 rds-inventory-explorer.zip | grep -E '/(docs|samples|tests|\.github)/'
+          # checksum published next to the zip; README install verifies it with sha256sum -c
+          sha256sum rds-inventory-explorer.zip > rds-inventory-explorer.zip.sha256
+          sha256sum -c rds-inventory-explorer.zip.sha256
+          unzip -q rds-inventory-explorer.zip -d check && ./check/rds-inventory-explorer/rds_inventory_explorer.sh --version
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/rds-inventory-explorer.zip dist/rds-inventory-explorer.zip.sha256 --clobber
+          else
+            gh release create "$TAG" dist/rds-inventory-explorer.zip dist/rds-inventory-explorer.zip.sha256 --title "$TAG" --notes "rds-inventory-explorer $TAG. CloudShell: curl -fsSLO https://github.com/${{ github.repository }}/releases/latest/download/rds-inventory-explorer.zip && curl -fsSLO https://github.com/${{ github.repository }}/releases/latest/download/rds-inventory-explorer.zip.sha256 && sha256sum -c rds-inventory-explorer.zip.sha256 && unzip -oq rds-inventory-explorer.zip && cd rds-inventory-explorer"
+          fi

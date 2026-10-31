@@ -1,0 +1,27 @@
+# Examples
+
+```bash
+# Current CloudShell login, every enabled region (empty regions skipped by a quick probe)
+./rds_inventory_explorer.sh -A -o ./out
+
+# Two profiles, HTML + the three CSVs, and save the data for merging
+./rds_inventory_explorer.sh -P prod,dev -A -F html,csv --save-data -o ./out
+
+# CSVs only (inventory, pending maintenance, insights findings)
+./rds_inventory_explorer.sh -A -F csv -o ./out
+
+# Skip Insights checks you do not care about
+./rds_inventory_explorer.sh -A --skip-checks default_port,gp2_storage,stopped
+
+# See the exact AWS calls first, without calling anything
+./rds_inventory_explorer.sh -P prod -A --dry-run
+
+# Settings file (the CLI overrides it)
+./rds_inventory_explorer.sh --config rds_inventory_explorer.conf.example
+
+# Windows Git Bash, offline: merge the data files downloaded from each account's CloudShell
+./rds_inventory_explorer.sh --merge ~/Downloads/rds -F html,csv -o ~/Downloads/rds/merged
+
+# Open a report straight on the Insights tab
+#   rds_inventory_explorer_111111111111_20261017_120000.html#tab=insights
+```

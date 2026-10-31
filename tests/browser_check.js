@@ -52,7 +52,7 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
     cards: document.querySelectorAll('#card').length,
     title: (document.querySelector('#card h2') || {}).textContent || null,
     sugg: [...document.querySelectorAll('#sugg.open .sg[data-i] .nm')].map(e => e.textContent)}));
-  const type = async v => { await g.click('#q', {clickCount: 3}); await g.keyboard.press('Backspace'); await g.keyboard.type(v); await sleep(150); return st(); };
+  const type = async v => { await g.click('#q'); await g.evaluate(() => { document.getElementById('q').value = ''; }); await g.keyboard.type(v); await sleep(150); return st(); };
   const text = () => g.evaluate(() => (document.getElementById('card') || document.body).innerText);
   const go = async id => { await g.evaluate(id => { location.hash = '#id=' + encodeURIComponent(id); }, id); await sleep(150); return st(); };
   const ids = await g.evaluate(() => Object.fromEntries(JSON.parse(document.getElementById('explorer-data').textContent).resources.map(x => [x.name, x.id])));
@@ -205,7 +205,7 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
   ok(r.pf6.rows.join() === 'orders-2,crm-pg' && r.pf6.on === 'st-30d' && /Showing 2 of 5/.test(r.pf6.shown), 'count strip click filters (within 30 days): ' + r.pf6.rows);
   if (S110) await g.screenshot({path: path.join(S110, '02_pending_filtered.png'), fullPage: true});
   await g.click('#st-30d'); await sleep(120); ok((await ps()).rows.length === 5, 'clicking the active count again clears it');
-  const ptype = async v => { await g.click('#pq', {clickCount: 3}); await g.keyboard.press('Backspace'); await g.keyboard.type(v); await sleep(150); return ps(); };
+  const ptype = async v => { await g.click('#pq'); await g.evaluate(() => { document.getElementById('pq').value = ''; }); await g.keyboard.type(v); await sleep(150); return ps(); };
   ok((await ptype('certificate')).rows.join() === 'hr-sqlserver', 'pending text search (description)');
   ok((await ptype('nonprod')).rows.join() === 'qa-mysql', 'pending text search (profile)');
   ok((await ptype('system-update us-east-1')).rows.join() === 'orders-2,crm-pg', 'pending text search (multi-token)');
@@ -228,7 +228,7 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
   await g.click('#pclear'); await sleep(120);
   await g.click('#pm-csv'); await sleep(150);
   r.dl1 = await lastDl();
-  ok(r.dl1 && r.dl1.name === 'rds_pending_maintenance_20261017_063000.csv' && /text\/csv/.test(r.dl1.type), 'pending CSV: file name + type: ' + (r.dl1 && r.dl1.name));
+  ok(r.dl1 && r.dl1.name === path.basename(file).replace(/\.html$/, '_pending.csv') && /text\/csv/.test(r.dl1.type), 'pending CSV: file name + type: ' + (r.dl1 && r.dl1.name));
   const b1 = Buffer.from(r.dl1.bytes);
   ok(b1[0] === 0xef && b1[1] === 0xbb && b1[2] === 0xbf, 'pending CSV: UTF-8 BOM');
   const t1 = b1.toString('utf8').slice(1);
@@ -238,7 +238,7 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
   ok(rows1[0][0] === 'Account' && rows1[0].length === 19 && rows1.every(x => x.length === 19), 'pending CSV: 19 columns on every row');
   ok(rows1.slice(1).map(x => x[3]).join() === ALL5 && rows1[1][18] === ids['hr-sqlserver'], 'pending CSV: rows in table order');
   if (CSVD) {
-    const f = fs.readdirSync(CSVD).find(x => /_pending_\d{8}_\d{6}\.csv$/.test(x));
+    const f = fs.readdirSync(CSVD).find(x => /_\d{8}_\d{6}_pending\.csv$/.test(x));
     ok(f && Buffer.compare(fs.readFileSync(path.join(CSVD, f)), b1) === 0, 'pending CSV from the page == --csv file, byte for byte');
   }
   await g.click('#st-30d'); await sleep(100); await sortBy('resource'); await sortBy('resource');
@@ -275,7 +275,7 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
   // CSV export from the Inventory tab
   await g.click('#inv-csv'); await sleep(150);
   r.dl3 = await lastDl(); const b3 = Buffer.from(r.dl3.bytes), t3 = b3.toString('utf8').slice(1), rows3 = parseCsv(t3);
-  ok(r.dl3.name === 'rds_inventory_20261017_063000.csv' && b3[0] === 0xef && b3[1] === 0xbb && b3[2] === 0xbf, 'inventory CSV: name + BOM: ' + r.dl3.name);
+  ok(r.dl3.name === path.basename(file).replace(/\.html$/, '_inventory.csv') && b3[0] === 0xef && b3[1] === 0xbb && b3[2] === 0xbf, 'inventory CSV: name + BOM: ' + r.dl3.name);
   ok(rows3.length === 1 + Object.keys(ids).length && rows3.every(x => x.length === rows3[0].length), 'inventory CSV: one row per resource, rectangular');
   ok(rows3[0].slice(0, 6).join() === 'Account,Profile,Region,Type,Identifier,Engine' && rows3[0].slice(-4).join() === 'tag:Application,tag:Environment,tag:Owner,tag:cost-center', 'inventory CSV: columns + tags as columns: ' + rows3[0].slice(-4));
   const qa = rows3.find(x => x[4] === 'qa-mysql'), H3 = rows3[0];
@@ -284,7 +284,7 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
   const oa = rows3.find(x => x[4] === 'orders-aurora');
   ok(oa[H3.indexOf('Backup retention (days)')] === '14' && oa[H3.indexOf('Maintenance window (IST)')] === 'sun:02:30-sun:03:00 IST' && oa[H3.indexOf('Pending incl. members')] === '2' && /^arn:aws:kms:/.test(oa[H3.indexOf('KMS key')]), 'inventory CSV: cluster row');
   if (CSVD) {
-    const f = fs.readdirSync(CSVD).find(x => /_inventory_\d{8}_\d{6}\.csv$/.test(x));
+    const f = fs.readdirSync(CSVD).find(x => /_\d{8}_\d{6}_inventory\.csv$/.test(x));
     ok(f && Buffer.compare(fs.readFileSync(path.join(CSVD, f)), b3) === 0, 'inventory CSV from the page == --csv file, byte for byte');
   }
   await g.select('#f-account', '222222222222'); await sleep(100);
@@ -305,7 +305,7 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
     await g2.goto(url + '#tab=pending'); await sleep(200);
     await g2.click('#pm-csv');
     let got = null; for (let i = 0; i < 50 && !got; i++) { await sleep(100); got = fs.readdirSync(dir).find(x => /\.csv$/.test(x)); }
-    ok(got === 'rds_pending_maintenance_20261017_063000.csv' && Buffer.compare(fs.readFileSync(path.join(dir, got)), b1) === 0, 'real browser download writes the same CSV: ' + got);
+    ok(got === path.basename(file).replace(/\.html$/, '_pending.csv') && Buffer.compare(fs.readFileSync(path.join(dir, got)), b1) === 0, 'real browser download writes the same CSV: ' + got);
     await g2.close(); fs.rmSync(dir, {recursive: true, force: true});
   }
 

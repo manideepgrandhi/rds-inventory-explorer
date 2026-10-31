@@ -92,7 +92,7 @@ dt{color:var(--muted)}dd{margin:0;min-width:0;word-break:break-word}
 .sources b{color:var(--fg);font-weight:600}
 .sources .src{white-space:nowrap}
 .sources .sup{color:var(--warn,#b45309)}
-@media (max-width:760px){.sources .src{white-space:normal}}
+@media (max-width:760px){.sources .src{white-space:normal;overflow-wrap:anywhere}}
 footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 .scroll{overflow-x:auto}
@@ -127,6 +127,15 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   table.stack td::before{content:attr(data-label);color:var(--muted);font-size:12px}
   .tabs{padding:0 10px}.toolbar .export{margin-left:0}
 }
+.igrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:14px}
+.igrid .panel{padding:10px 14px}.igrid h3{margin:0 0 8px;font-size:13px;color:var(--muted)}
+.bar{display:grid;grid-template-columns:minmax(0,1fr) 38px;gap:2px 8px;align-items:center;font-size:12.5px;margin:3px 0}
+.bar a{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bar .n{text-align:right;font-variant-numeric:tabular-nums}
+.bar i{grid-column:1/3;display:block;height:4px;border-radius:2px;background:var(--accent);opacity:.55}
+.tot{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.tot .stat{cursor:default}
+.sev{font-weight:600}.sev-High{color:var(--bad)}.sev-Medium{color:var(--warn)}.sev-Low{color:var(--muted)}
+.fchip{display:inline-flex;gap:8px;align-items:center;margin-left:10px}
+#in-table td:nth-child(2),#in-table td:nth-child(3){white-space:nowrap}
 @media (max-width:700px){dl{grid-template-columns:1fr}dt{margin-top:6px}}
 </style>
 </head>
@@ -145,6 +154,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
 <nav class="tabs" role="tablist" aria-label="Views">
   <button type="button" class="tab" role="tab" id="tab-inventory" aria-controls="view">Inventory</button>
   <button type="button" class="tab" role="tab" id="tab-pending" aria-controls="view">Pending maintenance</button>
+  <button type="button" class="tab" role="tab" id="tab-insights" aria-controls="view">Insights</button>
 </nav>
 <div class="toolbar" id="inv-toolbar">
   <div class="search">
@@ -168,6 +178,14 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   <select id="pf-urgency" aria-label="Urgency"></select>
   <button type="button" id="pclear">Clear</button>
   <button type="button" id="pm-csv" class="export" title="Download the actions shown (filters + search + sort) as CSV">Export CSV</button>
+</div>
+<div class="toolbar" id="in-toolbar" hidden>
+  <select id="if-account" aria-label="Account"></select>
+  <select id="if-region" aria-label="Region"></select>
+  <select id="if-check" aria-label="Check"></select>
+  <select id="if-sev" aria-label="Severity"></select>
+  <button type="button" id="iclear">Clear</button>
+  <button type="button" id="in-csv" class="export" title="Download the findings shown (filters) as CSV">Export CSV</button>
 </div>
 <main>
   <div id="view"></div>
@@ -223,13 +241,13 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
       var i = kv.indexOf('='); if (i <= 0) return;
       try { o[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); } catch (e) { o._bad = true; }
     });
-    o.tab = o.tab === 'pending' ? 'pending' : 'inventory';
+    o.tab = o.tab === 'pending' || o.tab === 'insights' ? o.tab : 'inventory';
     return o;
   }
   function mkHash(o) {
     var parts = [];
-    if (o.tab === 'pending') parts.push('tab=pending');
-    ['id', 'res'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
+    if (o.tab === 'pending' || o.tab === 'insights') parts.push('tab=' + o.tab);
+    ['id', 'res', 'f', 'fv'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
     return parts.length ? '#' + parts.join('&') : '';
   }
   function go(o) {
@@ -417,7 +435,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
         sec('Maintenance & upgrades', dl([['Maintenance window', win(d.maintenance_window)], ['Auto minor version upgrade', yn(d.auto_minor)],
           ['Parameter group(s)', d.param_groups.length ? h('span', null, d.param_groups.map(function (p, i) { return [i ? ', ' : '', h('code', { text: p.name }), p.status && p.status !== 'in-sync' ? [' ', pill(p.status, 'warn')] : '']; })) : dash()],
           ['Option group(s)', list(d.option_groups)], ['License', v(d.license)], ['Engine lifecycle', v(d.engine_lifecycle)], ['Created', when(d.created)],
-          ['Database name', v(d.database_name)], ['Resource id', mono(d.resource_id)], ['ARN', mono(r.id)]])),
+          ['Database name', v(d.database_name)], ['Resource id', mono(d.resource_id)]])),
         sec('Pending maintenance', pendingTable(pend, false), true),
         sec('Tags', tagsBlock(r.tags), true)));
   }
@@ -435,10 +453,20 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   opts(F.type, 'types', ['global', 'cluster', 'instance', 'member'].filter(function (t) { return R.some(function (r) { return r.type === t; }); }).map(function (t) { return [t, TYPE_LABEL[t]]; }));
   opts(F.engine, 'engines', uniq(R.map(function (r) { return r.engine; })).map(function (x) { return [x, x]; }));
 
+  // Insights facet (#f=<facet>&fv=<value>): class / family / vcpu count instances + members, the rest clusters + standalone instances
+  var FACETS = { engine: 'Engine', version: 'Version', class: 'Class', family: 'Family', account: 'Account', region: 'Region', az: 'Multi-AZ', storage: 'Storage type' };
+  var NODE_FACET = { class: 1, family: 1 };
+  function facetVal(r, f) { return r.ins ? (f === 'account' ? r.account : f === 'region' ? r.region : r.ins[f]) : null; }
+  function inFacet(r, f, fv) {
+    if (!r.ins || !(NODE_FACET[f] ? r.ins.node : r.ins.unit)) return false;
+    var x = facetVal(r, f); return x != null && String(x) === fv;
+  }
+  function facet() { var o = hp(); return o.tab === 'inventory' && o.f && Object.prototype.hasOwnProperty.call(FACETS, o.f) && o.fv != null ? o : null; }
   function filtered() {
-    var fa = F.account.value, fr = F.region.value, ft = F.type.value, fe = F.engine.value;
+    var fa = F.account.value, fr = F.region.value, ft = F.type.value, fe = F.engine.value, fc = facet();
     return R.filter(function (r) {
-      return (!fa || r.account === fa) && (!fr || r.regions.indexOf(fr) >= 0) && (!ft || r.type === ft) && (!fe || r.engine === fe);
+      return (!fa || r.account === fa) && (!fr || r.regions.indexOf(fr) >= 0) && (!ft || r.type === ft) && (!fe || r.engine === fe)
+        && (!fc || inFacet(r, fc.f, fc.fv));
     });
   }
   function matches(rs, q) {
@@ -522,10 +550,12 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
     setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
     toast('Saved ' + name);
   }
-  var CSVCOLS = M.csv_columns || { inventory: [], pending: [] }, STAMP = M.file_stamp || 'report';
+  var CSVCOLS = M.csv_columns || { inventory: [], pending: [], insights_findings: [] }, STAMP = M.file_stamp || 'report';
+  var FTAG = /^[A-Za-z0-9_]+$/.test(M.file_tag || '') ? M.file_tag + '_' : '';
+  function fname(kind) { return 'rds_inventory_explorer_' + FTAG + STAMP + '_' + kind + '.csv'; }
   $('inv-csv').addEventListener('click', function () {
     var rs = matches(filtered(), q.value.trim());
-    download('rds_inventory_' + STAMP + '.csv', inventoryCsv(rs));
+    download(fname('inventory'), inventoryCsv(rs));
   });
 
   /* ---------- Pending maintenance tab ---------- */
@@ -629,9 +659,88 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
     pq.value = ''; Object.keys(PF).forEach(function (k) { PF[k].value = ''; }); SORT.key = null; SORT.dir = 1;
     var o = hp(); go({ tab: 'pending', id: o.id });
   });
-  $('pm-csv').addEventListener('click', function () { download('rds_pending_maintenance_' + STAMP + '.csv', pendingCsv(shownPending())); });
+  $('pm-csv').addEventListener('click', function () { download(fname('pending'), pendingCsv(shownPending())); });
   $('tab-inventory').addEventListener('click', function () { go({ id: hp().id }); });
   $('tab-pending').addEventListener('click', function () { go({ tab: 'pending', id: hp().id }); });
+  $('tab-insights').addEventListener('click', function () { go({ tab: 'insights', id: hp().id }); });
+
+  /* ---------- Insights tab: fleet summary + audit findings, from the collected data only ---------- */
+  var INS = DATA.insights || { checks: [], findings: [], skipped: [], omitted: [] }, FD = INS.findings || [];
+  var IF = { account: $('if-account'), region: $('if-region'), check: $('if-check'), sev: $('if-sev') };
+  var CHK = {}; (INS.checks || []).forEach(function (c) { CHK[c.id] = c; });
+  opts(IF.account, 'accounts', uniq(R.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
+  opts(IF.region, 'regions', uniq(R.filter(function (r) { return r.ins; }).map(function (r) { return r.region; })).map(function (x) { return [x, x]; }));
+  opts(IF.check, 'checks', (INS.checks || []).filter(function (c) { return !c.skipped; }).map(function (c) { return [c.id, c.sev + ' - ' + c.label]; }));
+  opts(IF.sev, 'severities', ['High', 'Medium', 'Low'].map(function (x) { return [x, x]; }));
+  function inScope(x) { return (!IF.account.value || x.account === IF.account.value) && (!IF.region.value || x.region === IF.region.value); }
+  function shownFindings() {
+    return FD.filter(function (f) { return inScope(f) && (!IF.check.value || f.check === IF.check.value) && (!IF.sev.value || f.sev === IF.sev.value); });
+  }
+  function facetHash(f, val) { return mkHash({ f: f, fv: String(val) }); }
+  function bars(title, f, rows) {   // rows: [[value, count]] sorted by count
+    var max = rows.reduce(function (m, x) { return Math.max(m, x[1]); }, 1);
+    return h('div', { cls: 'panel', 'data-facet': f }, h('h3', { text: title }), rows.length ? rows.slice(0, 12).map(function (x) {
+      return h('div', { cls: 'bar' }, h('a', { href: facetHash(f, x[0]), title: 'Show these in Inventory', text: String(x[0]) }),
+        h('span', { cls: 'n', text: String(x[1]) }), h('i', { style: null, 'data-w': Math.max(2, Math.round(100 * x[1] / max)) }));
+    }) : dash(), rows.length > 12 ? h('div', { cls: 'muted', text: '+ ' + (rows.length - 12) + ' more' }) : null);
+  }
+  function countBy(rs, f) {
+    var m = {}; rs.forEach(function (r) { var x = facetVal(r, f); if (x != null && x !== '') m[x] = (m[x] || 0) + 1; });
+    return Object.keys(m).map(function (k) { return [k, m[k]]; }).sort(function (a, b) { return b[1] - a[1] || (a[0] < b[0] ? -1 : 1); });
+  }
+  function renderInsights() {
+    var view = $('view'); view.textContent = '';
+    document.title = 'Insights - RDS Inventory Explorer';
+    var units = R.filter(function (r) { return r.ins && r.ins.unit && inScope(r); }), nodes = R.filter(function (r) { return r.ins && r.ins.node && inScope(r); });
+    var vcpu = 0, vcpuUnknown = 0, gb = 0;
+    nodes.forEach(function (r) { if (r.ins.vcpu) vcpu += r.ins.vcpu; else vcpuUnknown++; });
+    units.forEach(function (r) { gb += r.ins.gb || 0; });
+    var fs = shownFindings(), all = FD.filter(inScope);
+    function tot(n, label, cls) { return h('span', { cls: 'stat' + (cls ? ' ' + cls : '') }, h('b', { text: String(n) }), h('span', { text: label })); }
+    var sevN = function (s) { return all.filter(function (f) { return f.sev === s; }).length; };
+    view.appendChild(h('div', { cls: 'tot', id: 'in-totals' },
+      tot(units.length, 'databases (clusters + standalone instances)'), tot(nodes.length, 'DB instances'),
+      tot('~' + vcpu, 'vCPUs' + (vcpuUnknown ? ' (' + vcpuUnknown + ' class(es) unknown)' : '')), tot(gb, 'GiB allocated (non-Aurora)'),
+      tot(sevN('High'), 'High findings', sevN('High') ? 'bad' : ''), tot(sevN('Medium'), 'Medium', sevN('Medium') ? 'warn' : ''), tot(sevN('Low'), 'Low')));
+    view.appendChild(h('div', { cls: 'igrid', id: 'in-facets' },
+      bars('Engine', 'engine', countBy(units, 'engine')), bars('Engine version', 'version', countBy(units, 'version')),
+      bars('Instance class', 'class', countBy(nodes, 'class')), bars('Instance family', 'family', countBy(nodes, 'family')),
+      bars('Account', 'account', countBy(units, 'account')), bars('Region', 'region', countBy(units, 'region')),
+      bars('Multi-AZ', 'az', countBy(units, 'az')), bars('Storage type', 'storage', countBy(units, 'storage'))));
+    view.querySelectorAll('.bar i').forEach(function (el) { el.style.width = el.getAttribute('data-w') + '%'; });
+    // per-account pass summary: checks run x databases in scope vs failures
+    var accts = uniq(units.map(function (r) { return r.account; }));
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Per-account summary' })));
+    view.appendChild(h('div', { cls: 'panel' }, table(['Account', 'Databases', 'Resources with findings', 'High', 'Medium', 'Low', 'Clean databases'],
+      accts.map(function (a) {
+        var af = all.filter(function (f) { return f.account === a; }), bad = {};
+        af.forEach(function (f) { bad[f.unit_id] = 1; });
+        var au = units.filter(function (r) { return r.account === a; }), clean = au.filter(function (r) { return !bad[r.id]; }).length;
+        var c = function (s) { return String(af.filter(function (f) { return f.sev === s; }).length); };
+        return [h('code', { text: a }), String(au.length), String(uniq(af.map(function (f) { return f.res_id; })).length), c('High'), c('Medium'), c('Low'),
+          clean + ' / ' + au.length + ' (' + (au.length ? Math.round(100 * clean / au.length) : 100) + '%)'];
+      }), 'stack')));
+    var sk = (INS.checks || []).filter(function (c) { return c.skipped; }).map(function (c) { return c.label; });
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Findings' }),
+      h('span', { cls: 'muted', id: 'in-shown', text: 'Showing ' + fs.length + ' of ' + FD.length + (sk.length ? '  ·  skipped: ' + sk.join(', ') : '') +
+        ((INS.omitted || []).length ? '  ·  ' + INS.omitted.join(' ') : '') })));
+    if (!fs.length) { view.appendChild(h('div', { cls: 'panel empty', id: 'in-none', text: FD.length ? 'No finding matches the filters.' : 'No findings: every check passed.' })); return; }
+    view.appendChild(h('div', { cls: 'panel scroll' }, table(['Severity', 'Account', 'Region', 'Resource', 'Check', 'Current value', 'Fix'],
+      fs.map(function (f) {
+        return [h('span', { cls: 'sev sev-' + f.sev, text: f.sev }), h('code', { text: f.account }), f.region,
+          h('span', null, link(f.res_id, f.res_name), ' ', badge(f.res_type)), f.label, v(f.value), h('span', { cls: 'muted', text: f.fix }) ];
+      }), 'stack pmt')));
+    view.lastChild.querySelector('table').id = 'in-table';
+  }
+  Object.keys(IF).forEach(function (k) { IF[k].addEventListener('change', render); });
+  $('iclear').addEventListener('click', function () { Object.keys(IF).forEach(function (k) { IF[k].value = ''; }); render(); });
+  $('in-csv').addEventListener('click', function () {
+    download(fname('insights_findings'), csvText([CSVCOLS.insights_findings || []].concat(shownFindings().map(function (f) { return f.csv; }))));
+  });
+  (function () {
+    var hi = FD.filter(function (f) { return f.sev === 'High'; }).length;
+    $('tab-insights').appendChild(h('span', { cls: 'n' + (hi ? ' warn' : ''), id: 'tab-insights-n', text: String(FD.length) }));
+  })();
   (function () {
     var n = C.pending_actions || 0, b = h('span', { cls: 'n' + (C.pending_past_due ? ' warn' : ''), id: 'tab-pending-n', text: String(n) });
     $('tab-pending').appendChild(b);
@@ -645,7 +754,10 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   function renderList() {
     var rs = matches(filtered(), q.value.trim()), view = $('view');
     view.textContent = '';
-    var head = h('div', { cls: 'listhead' }, h('h2', { text: 'Resources' }), h('span', { cls: 'muted', id: 'shown', text: 'Showing ' + rs.length + ' of ' + R.length + ' - pick one to see only its details' }));
+    var fc = facet();
+    var head = h('div', { cls: 'listhead' }, h('h2', { text: 'Resources' }), h('span', { cls: 'muted', id: 'shown', text: 'Showing ' + rs.length + ' of ' + R.length + ' - pick one to see only its details' }),
+      fc ? h('span', { cls: 'fchip chip', id: 'facet-chip' }, FACETS[fc.f] + ' = ' + fc.fv + (NODE_FACET[fc.f] ? ' (instances)' : ' (databases)'),
+        h('button', { type: 'button', id: 'facet-clear', title: 'Remove this filter', onclick: function () { go({}); } }, '×')) : null);
     view.appendChild(head);
     if (!R.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'No RDS / Aurora resources were found in the scanned accounts and regions.' })); return; }
     if (!rs.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the search / filters.' })); return; }
@@ -664,8 +776,10 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
     var o = hp(), view = $('view');
     $('tab-inventory').setAttribute('aria-selected', String(o.tab === 'inventory'));
     $('tab-pending').setAttribute('aria-selected', String(o.tab === 'pending'));
-    $('inv-toolbar').hidden = o.tab !== 'inventory'; $('pm-toolbar').hidden = o.tab !== 'pending';
+    $('tab-insights').setAttribute('aria-selected', String(o.tab === 'insights'));
+    $('inv-toolbar').hidden = o.tab !== 'inventory'; $('pm-toolbar').hidden = o.tab !== 'pending'; $('in-toolbar').hidden = o.tab !== 'insights';
     if (o.tab === 'pending') { closeSugg(); renderPending(o); return; }
+    if (o.tab === 'insights') { closeSugg(); renderInsights(); return; }
     var r = current();
     if (o.id && !r) {
       view.textContent = '';
