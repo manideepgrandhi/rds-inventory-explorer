@@ -50,6 +50,8 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   const bad = (r, k) => (r.values[k] && r.values[k].flag) || r.bl.results.some(x => x.param === k && (x.status === 'fail' || x.status === 'missing'));   // red = baseline fail OR security flag
   const nf = want.filter(r => bad(r, 'shared_preload_libraries')).length;
   ok(bt.st.length === want.length && bt.st.filter(c => /r-bad/.test(c)).length === nf && new RegExp('^' + want.length + ' resources: .*' + nf + ' fail').test(bt.cnt), 'fleet table rows/counts ' + bt.cnt);
+  const up = await g.evaluate(() => { const tr = [...document.querySelectorAll('#bp-table tbody tr')].find(x => /analytics-pg18$/.test(x.getAttribute('data-res'))); return tr && {c: tr.className, st: tr.cells[6].textContent, a: tr.cells[4].textContent}; });
+  ok(up && up.c === '' && up.st === 'OK' && /PGAUDIT/.test(up.a), 'uppercase " PGAUDIT " value is OK in both the baseline and the security check ' + JSON.stringify(up));
   if (shots) await g.screenshot({path: shots + '/03_baseline_parameter.png'});
   // unfiltered baseline CSV == script
   await nav('#tab=parameters');

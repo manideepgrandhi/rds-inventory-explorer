@@ -315,6 +315,8 @@ tests/                           run_tests.sh, validate_cli.sh, browser_check.js
 
 ## Changelog
 
+- **2.3.1**
+  - Fix: the `shared_preload_libraries` security flag ("pgaudit not loaded") now uses the same case-insensitive, trimmed set membership as the baseline `contains` rule, so `pg_stat_statements, PGAUDIT ,pg_tle` is OK in both (it was red before). It also no longer matches a substring such as `pgaudit_ext`.
 - **2.3.0**
   - **Simpler Parameters tab** (page only; data, merge and CSV formats unchanged). One filter row: Search, Account, Region, Engine, Level, Baseline parameter, Show. The flagged-only / non-default-only / off-baseline-only checkboxes, the group / parameter / severity dropdowns and the Drift view are gone.
   - **Search** over cluster, instance, parameter group, parameter name and value (`/` focuses, Esc clears). **Show:** all / problems only (baseline fail or security flag, counted once) / changed from default. **Level:** all / cluster group / instance group (differing member groups highlighted).

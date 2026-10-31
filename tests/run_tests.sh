@@ -55,7 +55,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.3\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.3\.1"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -227,7 +227,7 @@ chk "data file written next to the HTML" test -s "$SD"
 chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
 chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data*' 2>/dev/null)"
 dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
-dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.3.0" and .merged == false'
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.3.1" and .merged == false'
 dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
 dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
 dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
@@ -424,6 +424,9 @@ jqt bl '.baseline.sha256 == "'"$(sha256sum "$HERE/../lib/parameters.baseline.exa
 blt analytics-pg18 log_connections '["pass"]'          # PG18: receipt,authentication,authorization,... list
 blt reports-pg18 log_connections '["fail"]'            # PG18: receipt only
 blt analytics-pg18 shared_preload_libraries '["pass"]' # " PGAUDIT " spaces + case
+jqt bl '[.parameters.rows[] | select(.name == "analytics-pg18") | .values.shared_preload_libraries.flag] == [null]'   # security flag: same case-insensitive trimmed set membership
+jqt bl '[.parameters.rows[] | select(.name == "legacy-pg") | .values.shared_preload_libraries.flag] == ["pgaudit not loaded"]'
+jqt bl '[.insights.findings[] | select((.res_id | endswith(":analytics-pg18")) and (tostring | test("pgaudit not loaded")))] == []'
 blt pay-aurora-use1 shared_preload_libraries '["fail"]' # pg_tle missing
 jqt bl '[.parameters.rows[] | select(.name == "pay-aurora-use1") | .bl.results[] | select(.param == "shared_preload_libraries") | .why] == ["lacks pg_tle"]'
 blt legacy-apg-1 log_connections '["pass"]'           # PG13 boolean "on"

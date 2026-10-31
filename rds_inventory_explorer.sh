@@ -15,7 +15,7 @@ set -Eeuo pipefail
 umask 077 2>/dev/null || true
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.3.1"
 readonly DATA_SCHEMA="rds-inventory-explorer/data" DATA_SCHEMA_VERSION=1
 # Insights audit checks (lib/insights.jq); --skip-checks takes these ids, plus baseline / baseline:<parameter>
 readonly CHECK_IDS="public_access storage_not_encrypted deletion_protection_off copy_tags_off single_az backup_retention_low iam_auth_off ca_expiring auto_minor_off pi_off em_off no_log_exports default_port default_master_user old_generation gp2_storage stopped default_param_group ssl_not_forced tls_old_enabled conn_logging_off md5_password param_pending_reboot"

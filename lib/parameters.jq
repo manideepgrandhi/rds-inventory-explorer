@@ -25,6 +25,8 @@ def approx($gib): if $gib == null or (type != "string") then null
         reduce ($c.ops | [scan("([*/])([0-9]+)")][]) as $o ($gib * 1073741824;
             if $o[0] == "*" then . * ($o[1] | tonumber) else . / ($o[1] | tonumber) end) | floor end end;
 def off: (. // "") | ascii_downcase | . == "0" or . == "off" or . == "false";
+# list values (shared_preload_libraries ...): case-insensitive, trimmed set membership, same as the baseline "contains"
+def has_item($x): (. // "") | split(",") | map(ascii_downcase | sub("^[ \t]+"; "") | sub("[ \t]+$"; "")) | index([$x | ascii_downcase]) != null;
 def flag($n; $sec):
     (.v // "") as $v
     | if $n == "rds.force_ssl" and $v == "0" then "SSL not forced"
@@ -32,7 +34,7 @@ def flag($n; $sec):
       elif $n == "require_secure_transport" and ($v | off) then "secure transport not required"
       elif ($n == "rds.tls10" or $n == "rds.tls11") and ($v | ascii_downcase) == "enabled" then "\($n | ltrimstr("rds.") | ascii_upcase | sub("TLS1"; "TLS 1.")) enabled"
       elif $n == "password_encryption" and ($v | ascii_downcase) == "md5" then "md5 passwords"
-      elif $n == "shared_preload_libraries" and ($sec == "postgres" or $sec == "aurora-postgresql") and ($v | test("pgaudit") | not) then "pgaudit not loaded"
+      elif $n == "shared_preload_libraries" and ($sec == "postgres" or $sec == "aurora-postgresql") and ($v | has_item("pgaudit") | not) then "pgaudit not loaded"
       else null end;
 def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable, dtype: .DataType, allowed: .AllowedValues};
 
