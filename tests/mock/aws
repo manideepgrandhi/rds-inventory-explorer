@@ -307,7 +307,10 @@ PG_DEF = [P("rds.force_ssl", "1", "engine-default", dtype="boolean", allowed="0,
           P("track_activity_query_size", "4096", "engine-default", "static", "integer")]
 SSL_MIN = [P("ssl_min_protocol_version", "TLSv1.2", "engine-default", allowed="TLSv1,TLSv1.1,TLSv1.2,TLSv1.3")]   # PG 12+ only in this mock: absent from the PG13 family -> n/a
 DEFAULTS = {
-    ("cluster", "aurora-postgresql16"): PG_DEF[:3] + SSL_MIN + [P("shared_preload_libraries", "pg_stat_statements", "engine-default", "static"), P("apg_plan_mgmt.capture_plan_baselines", "off", "engine-default")],
+    # Aurora PostgreSQL 16 cluster defaults hold most parameters; log_disconnections / log_lock_waits are not in the cluster
+    # group here (real data showed such gaps) -> "not set in cluster parameter group" (FAIL)
+    ("cluster", "aurora-postgresql16"): [p for p in PG_DEF if p["ParameterName"] not in ("log_disconnections", "log_lock_waits")] + SSL_MIN
+                                        + [P("apg_plan_mgmt.capture_plan_baselines", "off", "engine-default")],
     ("instance", "aurora-postgresql16"): PG_DEF[3:],
     ("cluster", "aurora-postgresql13"): PG_DEF[:3], ("instance", "aurora-postgresql13"): PG_DEF[3:],
     ("instance", "postgres16"): PG_DEF + SSL_MIN + [P("wal_keep_size", "2048", "engine-default", dtype="integer")], ("cluster", "postgres16"): PG_DEF,
@@ -348,8 +351,13 @@ if OP in ("describe-db-parameter-groups", "describe-db-cluster-parameter-groups"
     k = "DBClusterParameterGroupName" if cl else "DBParameterGroupName"
     out({"DBClusterParameterGroups" if cl else "DBParameterGroups": [{k: n, "DBParameterGroupFamily": f, "Description": "mock"} for n, f in sorted(FAMILY.items())
                                                                     if (n in CLUSTER_GROUPS) == cl]})
+# the pay-global secondary (ap-south-1) has drifted from its primary: log_connections 1 there, 0 in us-east-1
+GROUP_VALUES[("pay-apg16-cluster@ap-south-1", "user")] = [P("log_connections", "1", "user", dtype="boolean") if p["ParameterName"] == "log_connections" else p
+                                                          for p in GROUP_VALUES[("pay-apg16-cluster", "user")]]
 if OP in ("describe-db-parameters", "describe-db-cluster-parameters"):
     n = o.get("--db-cluster-parameter-group-name") or o.get("--db-parameter-group-name")
+    if (n + "@" + REGION, o.get("--source", "")) in GROUP_VALUES:
+        out({"Parameters": GROUP_VALUES[(n + "@" + REGION, o.get("--source", ""))]})
     if n == "qa-mysql80":
         fail("AccessDenied", "DescribeDBParameters", "User: arn:aws:sts::%s:assumed-role/DBAReportsReadOnly/dba is not authorized to perform: rds:DescribeDBParameters on resource: %s" % (ACCT, n))
     if n not in FAMILY:

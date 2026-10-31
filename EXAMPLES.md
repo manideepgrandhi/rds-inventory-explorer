@@ -19,7 +19,8 @@
 # Check every resource against your parameter baseline (copy the bundled one outside the release folder first)
 cp lib/parameters.baseline.example ~/parameters.baseline
 ./rds_inventory_explorer.sh -P prod -A --with-parameters --baseline ~/parameters.baseline -F html,csv
-#   report.html#tab=parameters&sh=problems shows the failing servers first; &sh=overridden the Aurora clusters with instance overrides
+#   report.html#tab=parameters&sh=problems shows the failing servers first; &sh=overridden the Aurora clusters with instance overrides;
+#   &sh=xregion the global-cluster members whose baseline values differ across regions; &gc=NAME one global cluster
 #   --baseline none turns it off
 
 # Merge several accounts and check them all against one baseline

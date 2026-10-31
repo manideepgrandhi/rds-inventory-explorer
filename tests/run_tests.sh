@@ -61,7 +61,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.4\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.4\.1"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -233,7 +233,7 @@ chk "data file written next to the HTML" test -s "$SD"
 chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
 chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data*' 2>/dev/null)"
 dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
-dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.4.0" and .merged == false'
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.4.1" and .merged == false'
 dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
 dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
 dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
@@ -387,7 +387,7 @@ jqt aud '[.parameters.drift[] | select(.section == "rds-postgres" and .param == 
 jqt aud '[.insights.findings[] | select(.check == "default_param_group") | .sev] | unique == ["Medium"]'
 jqt aud '[.insights.findings[] | select(.check == "conn_logging_off") | .res_name] | index("pay-use1-1") == null'
 PCSV="$(find "$OUT/aud" -name '*_parameters.csv' | head -1)"
-chk "parameters CSV header" bash -c "head -1 '$PCSV' | tr -d '\r\357\273\277' | grep -qx 'Account,Region,Resource,Resource type,Cluster,Engine,Parameter,Value,Approx. computed,Source,From,Parameter group,Non-default,Apply type,Apply status'"
+chk "parameters CSV header" bash -c "head -1 '$PCSV' | tr -d '\r\357\273\277' | grep -qx 'Account,Region,Resource,Resource type,Cluster,Engine,Parameter,Value,Approx. computed,Source,From,Parameter group,Non-default,Apply type,Apply status,Global cluster,Global role'"
 chk "parameters CSV rows == values" test "$(($(wc -l <"$PCSV") - 1))" -eq "$(jq '[.parameters.rows[].values | length] | add' "$OUT/aud.json")"
 t noparams 0 fleet "${FLEET[@]}" -F html,csv
 chk "no --with-parameters: no parameter call and no parameters CSV" bash -c "! jq -r 'join(\" \")' '$MOCK_LOG' | tail -n 400 | grep -q 'parameters\b' ; test -z \"\$(find '$OUT/noparams' -name '*_parameters.csv')\""
@@ -451,7 +451,34 @@ jqt bl '[.parameters.rows[] | .bl.overrides[]? | (.value | ascii_downcase) != (.
 jqt bl '.baseline.totals.overridden == ([.parameters.rows[] | select(.bl.overridden > 0)] | length)'
 jqt bl '[.parameters.rows[] | select(.bl.overridden > 0) | .section] | unique == ["aurora-postgresql"]'
 jqt bl '[.parameters.rows[] | .bl.results[] | select(.overrides) | .status] | all(. != "instance-level")'
-chk "baseline CSV has the override column" bash -c "head -1 '$BLC' | tr -d '\r\357\273\277' | grep -q ',Overridden on (instance=value)$'"
+chk "baseline CSV has the override + global columns" bash -c "head -1 '$BLC' | tr -d '\r\357\273\277' | grep -q ',Overridden on (instance=value),Global cluster,Global role,Cross-region mismatch$'"
+# Aurora PostgreSQL: checked on the cluster group's effective value only; no value there = FAIL (no "instance-level, not checked")
+jqt bl '[.parameters.rows[] | .bl.results[]? | select(.status == "instance-level")] == []'
+jqt bl '[.parameters.rows[] | select(.section == "aurora-postgresql" and .type == "cluster") | .bl.results[] | select(.why == "not set in cluster parameter group")] | length > 0 and all(.status == "fail")'
+jqt bl '[.parameters.rows[] | select(.section == "aurora-postgresql" and .type == "cluster") | .bl.results[] | select(.actual == null and .status != "unknown" and .status != "n/a")] | all(.status == "fail" and .why == "not set in cluster parameter group")'
+jqt bl '([.parameters.rows[] | select(.section == "aurora-postgresql" and .type == "cluster") | .bl.results[] | select(.why == "not set in cluster parameter group") | .sev] | unique) - ["high", "medium", "low"] == []'
+jqt bl '[.parameters.rows[] | select(.section == "rds-postgres") | .bl.results[] | select(.why == "not set in cluster parameter group")] == []'
+# global clusters: role from describe-global-clusters, cross-region mismatch between primary and secondary (a flag, not a failure)
+jqt bl '[.parameters.rows[] | select(.global != null and .type == "cluster") | .global_role] | (index("primary") != null and index("secondary") != null)'
+jqt bl '[.parameters.rows[] | select(.type == "member" and .global != null) | .global_role] | all(. != null)'
+jqt bl '[.parameters.rows[] | select(.bl.xr > 0) | .global] | length > 0 and all(. != null)'
+jqt bl '.baseline.totals.xregion == ([.parameters.rows[] | select(.bl.xr > 0)] | length) and .baseline.totals.xregion_globals == ([.parameters.rows[] | select(.bl.xr > 0) | .global] | unique | length)'
+jqt bl '[.parameters.rows[] | select(.global_role == "secondary" and .type == "cluster") | .bl.results[] | select(.xr) | .xr] | length > 0 and all(test("^differs from primary [^ ]+ \\([a-z0-9-]+\\): "))'
+jqt bl '[.parameters.rows[] | select(.global_role == "primary" and .type == "cluster") | .bl.results[] | select(.xr) | .xr] | all(test("^differs on secondary "))'
+jqt bl '(.parameters.rows | map(select(.type == "cluster")) | INDEX(.res_id)) as $C | [.parameters.rows[] | select(.global_role == "secondary" and .type == "cluster") as $s | .bl.results[] | select(.xr) | .param as $p | ($s.values[$p].v // "") != ([$C[] | select(.global == $s.global and .global_role == "primary")][0].values[$p].v // "")] | all'
+jqt bl '[.parameters.rows[] | select(.bl.xr > 0)] | all(.bl.dev == ([.bl.results[] | select(.status == "fail" or .status == "missing")] | length))'
+jqt bl '[.parameters.rows[] | select(.global == null) | .bl.xr // 0] | all(. == 0)'
+chk "baseline CSV: cross-region rows == results with xr" test "$(grep -c 'differs \(from primary\|on secondary\)' "$BLC")" -eq "$(jq '[.parameters.rows[].bl.results[] | select(.xr)] | length' "$OUT/bl.json")"
+# one region only: the other member of the global cluster is not guessed
+t xr_use1 0 fleet -P prod -r us-east-1 --with-parameters --baseline "$FULLBL" --save-data
+t xr_aps1 0 fleet -P prod -r ap-south-1 --with-parameters --baseline "$FULLBL" --save-data
+jqt xr_use1 '[.parameters.rows[] | select(.global_role == "primary") | .bl.xr_notes[]?] | any(test("^secondary in ap-south-1 not scanned$"))'
+jqt xr_use1 '[.parameters.rows[] | .bl.xr // 0] | add == 0'
+jqt xr_aps1 '[.parameters.rows[] | select(.global_role == "secondary") | .bl.xr_notes[]?] | any(test("^primary in us-east-1 not scanned$"))'
+# --merge of saved data keeps the global roles and recomputes the cross-region flags
+t xr_merge 0 fleet --merge "$(find "$OUT/bl" -name '*_data.json' | head -1)" --baseline "$FULLBL"
+jqt xr_merge '.baseline.totals.xregion == '"$(jq '.baseline.totals.xregion' "$OUT/bl.json")"' and .baseline.totals.xregion > 0'
+jqt xr_merge '[.parameters.rows[] | select(.global != null and .type == "cluster") | .global_role] | sort == ["primary", "secondary"]'
 chk "baseline CSV header" bash -c "head -1 '$BLC' | tr -d '\r\357\273\277' | grep -q '^Account,'"
 chk "baseline CSV rows == results" test "$(($(wc -l <"$BLC") - 1))" -eq "$(jq '[.parameters.rows[].bl.results[]] | length' "$OUT/bl.json")"
 chk "baseline CSV: no cell starts with = + - @" bash -c "! grep -hE '(^|,)\"?[=+@-][A-Za-z(<]' '$BLC'"

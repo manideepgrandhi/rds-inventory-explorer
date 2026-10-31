@@ -13,7 +13,7 @@
 #                   in / contains / !contains take a comma list; between takes MIN-MAX; set takes no value (any non-empty value)
 #   severity      : high | medium | low
 # Aurora PostgreSQL: checked once per cluster against the cluster parameter group (else the AWS cluster default);
-#   instance-level parameters show "instance-level, not checked"; a member whose instance group sets a baseline
+#   a parameter with no value there fails ("not set in cluster parameter group"); a member whose instance group sets a baseline
 #   parameter to another value is shown as "overridden on N instance(s)" (a note, not a failure).
 # Values: 1/on/true/yes and 0/off/false/no are the same; numbers are compared as numbers; {DBInstanceClassMemory...}
 # formulas are estimated from the instance class (marked approx). A parameter the engine version does not have is "n/a".

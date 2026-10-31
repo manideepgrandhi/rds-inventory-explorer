@@ -164,7 +164,7 @@ tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-war
 .prow{cursor:pointer;user-select:none}.prow:hover{background:var(--panel2)}.prow .tw{display:inline-block;width:14px;color:var(--muted)}
 .pres.p-bad,.pres.p-warn{background:var(--panel);color:var(--text)}.pres.p-bad{border-left:3px solid var(--bad)}.pres.p-warn{border-left:3px solid var(--warn)}
 .pmembers{margin:0 0 10px 28px}.mtoggle{font-size:12.5px;margin:0 0 8px 28px}
-.pcount{margin:0 0 8px;font-size:13px}.ovnote{color:var(--muted);font-size:12px;white-space:nowrap}
+.pcount{margin:0 0 8px;font-size:13px}.ovnote{color:var(--muted);font-size:12px;white-space:nowrap}.xrnote{color:#b45309;font-size:12px;white-space:nowrap;font-weight:600}.gcell .muted{font-size:12px}
 tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{background:var(--panel2);padding:8px 12px}
 .sdetail h4{margin:10px 0 4px;font-size:13px}.sdetail h4:first-child{margin-top:0}.fails .fn{margin-right:2px}tr.hlres td{outline:0;background:color-mix(in srgb,var(--accent) 10%,transparent)}
 #px-servers tr.srow>td:nth-child(3),#px-servers tr.srow>td:nth-child(4),#px-servers .fails{white-space:nowrap}
@@ -231,8 +231,9 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
   <select id="xf-region" aria-label="Region"></select>
   <select id="xf-engine" aria-label="Engine"></select>
   <select id="xf-level" aria-label="Level"><option value="">Level: all (effective values)</option><option value="cluster">Level: cluster group</option><option value="instance">Level: instance group</option></select>
+  <select id="xf-global" aria-label="Global cluster"></select>
   <select id="xf-bparam" aria-label="Baseline parameter"></select>
-  <select id="xf-show" aria-label="Show"><option value="">Show: all</option><option value="problems">Show: problems only</option><option value="overridden">Show: overridden at instance</option><option value="changed">Show: changed from default</option></select>
+  <select id="xf-show" aria-label="Show"><option value="">Show: all</option><option value="problems">Show: problems only</option><option value="overridden">Show: overridden at instance</option><option value="xregion">Show: cross-region mismatch</option><option value="changed">Show: changed from default</option></select>
   <button type="button" id="xclear">Clear</button>
   <button type="button" id="px-csv" class="export" title="Download what is on screen (view, filters, level, search) as CSV">Export CSV</button>
   <button type="button" id="px-bcsv" class="export2" title="Download the baseline results shown as CSV - same columns as the script's _baseline.csv">Baseline CSV</button>
@@ -297,7 +298,7 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
   function mkHash(o) {
     var parts = [];
     if (o.tab === 'pending' || o.tab === 'insights' || o.tab === 'parameters') parts.push('tab=' + o.tab);
-    ['id', 'res', 'f', 'fv', 'pv', 'grp', 'pq', 'pa', 'pr', 'pe', 'lv', 'bp', 'sh'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
+    ['id', 'res', 'f', 'fv', 'pv', 'grp', 'pq', 'pa', 'pr', 'pe', 'lv', 'gc', 'bp', 'sh'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
     return parts.length ? '#' + parts.join('&') : '';
   }
   function go(o) {
@@ -808,15 +809,15 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
 
   /* ---------- Parameters tab (--with-parameters): By resource / By parameter group ---------- */
   // Hash state: pv=group, grp=<gid>, res=<arn>, pq=<search>, pa/pr/pe=<account/region/engine section>, lv=cluster|instance (By group only),
-  // sh=problems|overridden|changed, bp=<family|param> (fleet table for one baseline parameter)
+  // gc=<global cluster name>, sh=problems|overridden|xregion|changed, bp=<family|param> (fleet table for one baseline parameter)
   // Expected values come only from the baseline file (DATA.baseline); nothing here knows a parameter's "right" value.
   var PA = DATA.parameters || { collected: false, rows: [], groups: [], drift: [], csv: [], notes: [], not_collected: [] };
   var PROWS = PA.rows || [], PGRP = PA.groups || [];
   var GBY = {}; PGRP.forEach(function (g) { GBY[g.gid] = g; });
   var PCSV = [], pOff = 0;   // the script's CSV rows (lib/parameters.jq) for each resource row, same order
   PROWS.forEach(function (r) { var n = Object.keys(r.values).length; PCSV.push((PA.csv || []).slice(pOff, pOff + n)); pOff += n; });
-  var XF = { account: $('xf-account'), region: $('xf-region'), engine: $('xf-engine'), level: $('xf-level'), bparam: $('xf-bparam'), show: $('xf-show') };
-  var XQ = $('px-q'), XKEY = { account: 'pa', region: 'pr', engine: 'pe', level: 'lv', bparam: 'bp', show: 'sh' };
+  var XF = { account: $('xf-account'), region: $('xf-region'), engine: $('xf-engine'), level: $('xf-level'), global: $('xf-global'), bparam: $('xf-bparam'), show: $('xf-show') };
+  var XQ = $('px-q'), XKEY = { account: 'pa', region: 'pr', engine: 'pe', level: 'lv', global: 'gc', bparam: 'bp', show: 'sh' };
   var BL = DATA.baseline || { applied: false }, BLON = !!BL.applied, PROW = {};
   PROWS.forEach(function (r, i) { r._i = i; PROW[r.res_id] = r; });
   var BCSV = [], bOff = 0;   // the script's baseline CSV rows for each resource row, same order
@@ -835,12 +836,11 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
   function isApgMember(r) { return r.section === 'aurora-postgresql' && r.type === 'member' && !!r.cluster_id && !!PROW[r.cluster_id]; }
   function isDev(x) { return x.status === 'fail' || x.status === 'missing'; }
   function blOf(r, k) { return r && r.bl ? r.bl.results.filter(function (b) { return b.param === k; })[0] || null : null; }
-  /* one parameter of one resource -> plain status: bad (fails baseline), warn (couldn't check), na (doesn't apply / instance-level), ok, none (no rule) */
+  /* one parameter of one resource -> plain status: bad (fails baseline), warn (couldn't check), na (doesn't apply), ok, none (no rule) */
   function pStatus(r, k) {
     var b = BLON ? blOf(r, k) : null;
-    if (b && isDev(b)) return { c: 'bad', t: b.status === 'missing' ? 'Not set - fails baseline' : 'Fails baseline', b: b };
+    if (b && isDev(b)) return { c: 'bad', t: b.why === 'not set in cluster parameter group' ? 'Not set in cluster parameter group - fails' : b.status === 'missing' ? 'Not set - fails baseline' : 'Fails baseline', b: b };
     if (b && b.status === 'unknown') return { c: 'warn', t: "Couldn't check", b: b };
-    if (b && b.status === 'instance-level') return { c: 'na', t: 'Instance-level, not checked', b: b };
     if (b && b.status === 'n/a') return { c: 'na', t: "Doesn't apply", b: b };
     if (b && b.status === 'pass') return { c: 'ok', t: 'OK', b: b };
     return { c: 'none', t: 'OK', b: null };
@@ -850,6 +850,14 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     if (!b || !b.overrides || !b.overrides.length) return null;
     var n = b.overrides.length;
     return h('span', { cls: 'ovnote', title: b.overrides.map(function (o) { return o.instance + ' = ' + o.value; }).join('\n'), text: ' overridden on ' + n + ' instance' + (n === 1 ? '' : 's') });
+  }
+  function xrNote(b) {   // global cluster: this cluster-level value differs between the primary and a secondary (a flag, not a failure)
+    if (!b || !b.xr) return null;
+    return h('span', { cls: 'xrnote', title: b.xr, text: ' cross-region mismatch' });
+  }
+  function glCell(r) {   // Global cluster name + role
+    if (!r || !r.global) return dash();
+    return h('span', { cls: 'gcell' }, h('span', { text: r.global }), r.global_role ? h('span', { cls: 'muted', text: ' (' + r.global_role + ')' }) : null);
   }
   function pending(r) { return [r.apply_status, r.cluster_apply_status].some(function (s) { return s && s !== 'in-sync'; }); }
   function problemKeys(r) { return BLON && r.bl ? r.bl.results.filter(isDev).map(function (b) { return b.param; }) : []; }
@@ -879,7 +887,7 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     var rs = r.bl ? r.bl.results : [];
     if (!rs.length) return h('div', { cls: 'empty pmsg', text: 'No baseline rule for this engine.' });
     var t = table(['Parameter', 'Actual', 'Expected', 'Status', 'Severity', 'Comes from'], rs.map(function (x) {
-      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), h('span', null, stPill(pStatus(r, x.param)), ovNote(x)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] }),
+      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), h('span', null, stPill(pStatus(r, x.param)), ovNote(x), xrNote(x)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] }),
         x.from ? fromCell(r, { from: x.from, group: x.group, src: (r.values[x.param] || {}).src }) : dash()];
     }), 'stack ptab bltab');
     Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { tr.className = stRowCls(r, rs[i]); });
@@ -901,6 +909,9 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
   opts(XF.account, 'accounts', uniq(PROWS.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
   opts(XF.region, 'regions', uniq(PROWS.map(function (r) { return r.region; })).map(function (x) { return [x, x]; }));
   opts(XF.engine, 'engines', uniq(PROWS.map(function (r) { return r.section; })).map(function (x) { return [x, secName(x)]; }));
+  opts(XF.global, 'global clusters', uniq(PROWS.map(function (r) { return r.global; })).map(function (x) { return [x, 'Global: ' + x]; }));
+  if (!uniq(PROWS.map(function (r) { return r.global; })).length) XF.global.hidden = true;
+  if (!BLON) XF.show.querySelector('option[value="xregion"]').hidden = true;
   function fillBparam(engine) {   // Baseline parameter: the rules of the baseline file, only those for the chosen engine
     var cur = XF.bparam.value; XF.bparam.textContent = '';
     XF.bparam.appendChild(h('option', { value: '', text: 'Baseline parameter: any' }));
@@ -935,10 +946,11 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
       s.rows.forEach(function (x) { if (x.bl) { s.f.high += x.bl.high || 0; s.f.medium += x.bl.medium || 0; s.f.low += x.bl.low || 0; s.nres += x.bl.results.length; } });
       s.fails = BLON ? s.f.high + s.f.medium + s.f.low : 0;
       s.ov = BLON && s.r.bl ? s.r.bl.overridden || 0 : 0;
+      s.xr = BLON && s.r.bl ? s.r.bl.xr || 0 : 0;
       s.changed = s.rows.some(function (x) { return Object.keys(x.values).some(function (k) { return x.values[k].nondef; }); });
       s.pend = s.rows.some(pending);
       s.hay = [].concat.apply([], s.rows.map(function (x) {
-        return [x.name, x.engine, x.cluster_group && x.cluster_group.split('|').pop(), x.instance_group && x.instance_group.split('|').pop()]
+        return [x.name, x.engine, x.global, x.cluster_group && x.cluster_group.split('|').pop(), x.instance_group && x.instance_group.split('|').pop()]
           .concat(Object.keys(x.values).map(function (k) { return k + ' ' + (x.values[k].v == null ? '' : x.values[k].v); }));
       })).join(' ').toLowerCase();
     });
@@ -946,11 +958,12 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
   })();
   var SBY = {}; SERVERS.forEach(function (s) { s.rows.forEach(function (x) { SBY[x.res_id] = s; }); });
   function srvIn(v, s, noShow) {
-    if (!scopeOk(v.r, s) || (s.engine && v.r.section !== s.engine)) return false;
+    if (!scopeOk(v.r, s) || (s.engine && v.r.section !== s.engine) || (s.global && v.r.global !== s.global)) return false;
     if (s.q && v.hay.indexOf(s.q) < 0) return false;
     if (noShow) return true;
     if (s.show === 'problems') return v.fails > 0;
     if (s.show === 'overridden') return v.ov > 0;
+    if (s.show === 'xregion') return v.xr > 0;
     if (s.show === 'changed') return v.changed;
     return true;
   }
@@ -968,7 +981,7 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     var rs = sortRules(r);
     if (!rs.length) return h('div', { cls: 'empty pmsg', text: r.section ? 'No baseline rule for this engine.' : 'This engine is not in lib/parameters.list.' });
     var t = table(['Parameter', 'Actual', 'Expected', 'Status', 'Severity'], rs.map(function (x) {
-      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), h('span', null, stPill(pStatus(r, x.param)), ovNote(x)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] })];
+      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), h('span', null, stPill(pStatus(r, x.param)), ovNote(x), xrNote(x)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] })];
     }), 'stack ptab rtab');
     Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { tr.className = stRowCls(r, rs[i]); tr.setAttribute('data-k', rs[i].param); });
     return t;
@@ -981,6 +994,12 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
   function srvDetail(v) {
     var r = v.r, out = [];
     if (r.group_error) out.push(h('div', { cls: 'empty pmsg', text: 'Parameter group could not be read: ' + r.group_error }));
+    if (r.global) {
+      var gn = (r.bl && r.bl.xr_notes) || [];
+      out.push(h('div', { cls: 'muted pmsg gnote' }, 'Global cluster ' + r.global + (r.global_role ? ' (' + r.global_role + ')' : '') + (BLON ? ': each baseline parameter is compared with the other region(s) of the global cluster' : '') + '.',
+        BLON && r.bl && r.bl.xr ? [' ', h('span', { cls: 'xrnote', text: r.bl.xr + ' cross-region mismatch' + (r.bl.xr === 1 ? '' : 'es') })] : null,
+        gn.map(function (t) { return [' ', pill(t, 'warn')]; })));
+    }
     if (BLON) {
       out.push(h('h4', { text: 'Baseline rules' + (r.type === 'cluster' ? ' (cluster parameter group)' : '') }), ruleTable(r));
       if (r.section === 'aurora-postgresql' && v.mem.length) out.push(h('div', { cls: 'muted pmsg', text: 'Members (' + v.mem.map(function (m) { return m.name; }).join(', ') + ') are not checked: Aurora PostgreSQL is checked once per cluster, on the cluster parameter group.' }));
@@ -995,18 +1014,19 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     return h('div', { cls: 'sdetail' }, out);
   }
   function srvTable(list, o) {
-    var t = table(['Server', 'Engine / version', 'Account', 'Region', 'Parameter group', 'Fails (H/M/L)', 'Overrides', 'Status'], list.map(function (v) {
+    var t = table(['Server', 'Engine / version', 'Account', 'Region', 'Global cluster', 'Parameter group', 'Fails (H/M/L)', 'Overrides', 'Status'], list.map(function (v) {
       var r = v.r, res = BY[r.res_id], open = !!OPEN[r.res_id];
       var g = r.type === 'cluster' ? r.cluster_group : r.instance_group;
       return [h('span', null, h('span', { cls: 'tw', text: open ? '▾' : '▸' }), badge(r.type), ' ', link(r.res_id, r.name), v.mem.length ? h('span', { cls: 'muted', text: ' · ' + v.mem.length + ' member(s)' }) : null),
         h('span', null, secName(r.section), h('span', { cls: 'muted', text: res && res.version ? ' ' + res.version : '' })),
-        h('code', { text: r.account }), r.region, grpLink(g, g && g.split('|').pop()),
+        h('code', { text: r.account }), r.region, glCell(r), grpLink(g, g && g.split('|').pop()),
         !BLON || !v.nres ? dash() : h('span', { cls: 'fails', 'data-fails': v.f.high + ',' + v.f.medium + ',' + v.f.low }, [['high', 'H'], ['medium', 'M'], ['low', 'L']].map(function (x, i) {
           return [i ? ' ' : '', h('span', { cls: v.f[x[0]] ? 'fn sev sev-' + BLSEV[x[0]] : 'fn muted', text: v.f[x[0]] + ' ' + x[1] })];
         })),
         v.ov ? h('span', { cls: 'ovnote', text: 'on ' + v.ov + ' instance' + (v.ov === 1 ? '' : 's') }) : dash(),
         h('span', null, !BLON || !v.nres ? h('span', { cls: 'muted', text: BLON ? 'no rule' : '—' }) : v.fails ? pill(v.fails + ' fail', 'bad') : pill('OK', 'ok'),
-          v.pend ? [' ', h('span', { cls: 'pill p-warn', title: 'a parameter change is waiting for a reboot', text: 'pending reboot' })] : null)];
+          v.pend ? [' ', h('span', { cls: 'pill p-warn', title: 'a parameter change is waiting for a reboot', text: 'pending reboot' })] : null,
+          v.xr ? [' ', h('span', { cls: 'pill p-warn xrpill', title: 'cluster-level values differ between the regions of global cluster ' + r.global, text: 'cross-region mismatch' })] : null)];
     }), 'stack ptab srv');
     var tb = t.querySelector('tbody'); t.querySelector('table').id = 'px-servers';
     Array.prototype.slice.call(tb.children).forEach(function (tr, i) {
@@ -1015,14 +1035,15 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
       tr.setAttribute('data-res', id); tr.setAttribute('tabindex', '0'); tr.setAttribute('aria-expanded', String(open));
       tr.addEventListener('click', function (e) { if (e.target.closest('a')) return; OPEN[id] = !open; if (!OPEN[id] && o.res && SBY[o.res] === v) pSet({ res: '' }, true); else render(); });
       tr.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } });
-      if (open) tb.insertBefore(h('tr', { cls: 'sdrow', 'data-for': id }, h('td', { colspan: '8' }, srvDetail(v))), tr.nextSibling);
+      if (open) tb.insertBefore(h('tr', { cls: 'sdrow', 'data-for': id }, h('td', { colspan: '9' }, srvDetail(v))), tr.nextSibling);
     });
     return t;
   }
   function legend() {
     return h('div', { cls: 'plegend', id: 'px-legend' }, h('span', null, h('i', { cls: 'sw s-bad' }), 'fails the baseline'),
-      h('span', null, h('i', { cls: 'sw s-warn' }), "pending reboot / couldn't check"), h('span', null, h('i', { cls: 'sw s-na' }), "doesn't apply / instance-level, not checked"),
+      h('span', null, h('i', { cls: 'sw s-warn' }), "pending reboot / couldn't check"), h('span', null, h('i', { cls: 'sw s-na' }), "doesn't apply"),
       h('span', { title: 'An instance parameter group sets a different value than the cluster group. The cluster value is what is checked.' }, h('span', { cls: 'ovnote', text: 'overridden on N' }), ' instance value differs'),
+      BLON && BL.totals && BL.totals.xregion ? h('span', { title: 'Global cluster: the cluster-level value differs between the primary and a secondary. Each cluster is still checked against the baseline on its own.' }, h('span', { cls: 'xrnote', text: 'cross-region mismatch' }), ' primary / secondary differ') : null,
       h('span', { title: '≈ approximate: DBInstanceClassMemory estimated from the instance class' }, h('code', { cls: 'nd', text: 'value' }), ' changed from default'));
   }
   /* fleet table for one baseline parameter */
@@ -1036,6 +1057,7 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
         var st = pStatus(r, k);
         if (s.show === 'problems' && st.c !== 'bad') return;
         if (s.show === 'overridden' && !(b.overrides && b.overrides.length)) return;
+        if (s.show === 'xregion' && !b.xr) return;
         if (s.show === 'changed' && !(r.values[k] && r.values[k].nondef)) return;
         out.push({ r: r, st: st, b: b, member: r !== v.r, i: out.length });
       });
@@ -1047,12 +1069,12 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     var x = bpRows(s), c = { ok: 0, bad: 0, warn: 0, na: 0 };
     x.rows.forEach(function (y) { c[y.st.c === 'none' ? 'ok' : y.st.c]++; });
     view.appendChild(h('div', { cls: 'listhead' }, h('h2', null, 'Baseline parameter ', h('code', { text: x.k })), h('span', { cls: 'muted', id: 'px-shown', text: (FAMN[x.fam] || x.fam) + ' resources' })));
-    view.appendChild(h('div', { cls: 'pcount', id: 'bp-count', text: x.rows.length + ' resources: ' + c.ok + ' OK, ' + c.bad + ' fail' + (c.warn ? ', ' + c.warn + " couldn't check" : '') + (c.na ? ', ' + c.na + " doesn't apply / not checked" : '') }));
+    view.appendChild(h('div', { cls: 'pcount', id: 'bp-count', text: x.rows.length + ' resources: ' + c.ok + ' OK, ' + c.bad + ' fail' + (c.warn ? ', ' + c.warn + " couldn't check" : '') + (c.na ? ', ' + c.na + " doesn't apply" : '') }));
     if (!x.rows.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
-    var t = table(['Account', 'Region', 'Resource', 'Engine / version', 'Actual', 'Expected', 'Status', 'Comes from'], x.rows.map(function (y) {
+    var t = table(['Account', 'Region', 'Resource', 'Engine / version', 'Global cluster', 'Actual', 'Expected', 'Status', 'Comes from'], x.rows.map(function (y) {
       var r = y.r, res = BY[r.res_id];
       return [h('code', { text: r.account }), r.region, h('span', { cls: y.member ? 'ind' : null }, badge(r.type), ' ', h('a', { href: mkHash(pHash({ bp: '', res: r.res_id })), title: 'Open in By resource', text: r.name })),
-        secName(r.section) + (res && res.version ? ' ' + res.version : ''), actualCell(r.values[x.k], y.b), h('span', { text: y.b.expected }), h('span', null, stPill(y.st), ovNote(y.b)),
+        secName(r.section) + (res && res.version ? ' ' + res.version : ''), glCell(r), actualCell(r.values[x.k], y.b), h('span', { text: y.b.expected }), h('span', null, stPill(y.st), ovNote(y.b), xrNote(y.b)),
         r.values[x.k] ? fromCell(r, r.values[x.k]) : y.b.from ? fromCell(r, { from: y.b.from, group: y.b.group }) : dash()];
     }), 'stack ptab');
     t.querySelector('table').id = 'bp-table';
@@ -1104,7 +1126,7 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     Object.keys(XKEY).forEach(function (k) { XF[k].value = s[k]; if (XF[k].value !== s[k]) { XF[k].value = ''; s[k] = ''; } });
     if (document.activeElement !== XQ) XQ.value = o.pq || '';
     ['resource', 'group'].forEach(function (m) { $('pv-' + m).setAttribute('aria-pressed', String(m === mode)); });
-    XF.bparam.disabled = mode === 'group'; XF.level.hidden = mode !== 'group';
+    XF.bparam.disabled = mode === 'group'; XF.level.hidden = mode !== 'group'; XF.global.disabled = mode === 'group';
     if (!PA.collected) {
       view.appendChild(h('div', { cls: 'panel empty', id: 'px-none', text: 'Parameters were not collected for this report. Re-run with --with-parameters (or with-parameters=true in the config file).' }));
       return;
@@ -1133,6 +1155,7 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
         if (fp && !(famMatch(fp[0], r.section) && b.param === fp.slice(1).join('|'))) return false;
         if (s.show === 'problems') return isDev(b);
         if (s.show === 'overridden') return !!(b.overrides && b.overrides.length);
+        if (s.show === 'xregion') return !!b.xr;
         return true;
       });
     }))));
@@ -1147,11 +1170,11 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     }
     if (s.bparam && BLON) {
       var x = bpRows(s);
-      return csvText([['Account', 'Region', 'Resource', 'Resource type', 'Cluster', 'Engine', 'Version', 'Parameter', 'Actual', 'Expected', 'Status', 'Comes from', 'Overridden on (instance=value)']].concat(x.rows.map(function (y) {
+      return csvText([['Account', 'Region', 'Resource', 'Resource type', 'Cluster', 'Engine', 'Version', 'Parameter', 'Actual', 'Expected', 'Status', 'Comes from', 'Overridden on (instance=value)', 'Global cluster', 'Global role', 'Cross-region mismatch']].concat(x.rows.map(function (y) {
         var r = y.r, p = r.values[x.k], f = p || { from: y.b.from, group: y.b.group };
         var src = f.from === 'default' ? 'AWS default' : f.from ? (f.from === 'instance' ? 'Instance group ' : 'Cluster group ') + String(f.group || '').split('|').pop() : '';
         return [r.account, r.region, r.name, r.type, r.cluster_name || '', r.engine, (BY[r.res_id] && BY[r.res_id].version) || '', x.k, p && p.v != null ? p.v : y.b.actual != null ? y.b.actual : '', y.b.expected, y.st.t, src,
-          (y.b.overrides || []).map(function (q) { return q.instance + '=' + q.value; }).join('; ')];
+          (y.b.overrides || []).map(function (q) { return q.instance + '=' + q.value; }).join('; '), r.global || '', r.global_role || '', y.b.xr || ''];
       })));
     }
     return csvText([CSVCOLS.parameters || []].concat([].concat.apply([], visRows(s).map(function (r) {
@@ -1249,6 +1272,7 @@ tr.srow.s-fail td:first-child{box-shadow:inset 3px 0 0 var(--bad)}tr.sdrow>td{ba
     var bt = BL.totals, sv = { high: 0, medium: 0, low: 0 };
     (BL.accounts || []).forEach(function (a) { sv.high += a.high || 0; sv.medium += a.medium || 0; sv.low += a.low || 0; });
     var bc = chip(bt.off + ' of ' + bt.resources, 'off baseline · ' + sv.high + ' high, ' + sv.medium + ' medium, ' + sv.low + ' low' + (bt.overridden ? ' · ' + bt.overridden + ' overridden at instance' : '') +
+      (bt.xregion ? ' · ' + bt.xregion + ' cross-region mismatch' : '') +
       (BL.legacy_postgres ? ' · legacy postgres| rules (Aurora + RDS)' : '') + '  (' + BL.file + ' · sha256 ' + BL.sha_short + ')', bt.off ? 'warnc bl-chip' : 'bl-chip',
       ['Parameter baseline ' + BL.file + ', sha256 ' + BL.sha256 + ', ' + BL.rules + ' rule(s).'].concat((BL.accounts || []).map(function (a) {
         return a.account + (profOf[a.account] ? ' (' + profOf[a.account].join(', ') + ')' : '') + ': ' + a.off + ' of ' + a.resources + ' off baseline · ' + a.high + ' high, ' + a.medium + ' medium, ' + a.low + ' low';

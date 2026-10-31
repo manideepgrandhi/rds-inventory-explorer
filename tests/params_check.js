@@ -59,17 +59,17 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   } else {
     ok(P.collected && R.length > 0, 'data has parameters');
     const tb = await g.evaluate(() => [...document.getElementById('px-toolbar').querySelectorAll('input,select')].filter(e => !e.hidden).map(e => e.getAttribute('aria-label')));
-    ok(JSON.stringify(tb) === JSON.stringify(['Search parameters', 'Account', 'Region', 'Engine', ...(BLON ? ['Baseline parameter'] : []), 'Show']), 'filter row (Level hidden in By resource): ' + tb);
+    ok(JSON.stringify(tb) === JSON.stringify(['Search parameters', 'Account', 'Region', 'Engine', ...(R.some(r => r.global) ? ['Global cluster'] : []), ...(BLON ? ['Baseline parameter'] : []), 'Show']), 'filter row (Level hidden in By resource): ' + tb);
     ok(await g.evaluate(() => !document.querySelector('.cmp,.cmpbox') && !/cmp=/.test(location.hash)), 'compare links removed');
     ok(await g.evaluate(() => /fails the baseline/.test(document.getElementById('px-legend').textContent) && /doesn't apply/.test(document.getElementById('px-legend').textContent)), 'one-line legend');
     let s = await vis();
     ok(s.length === SV.length && ids(s) === SV.map(r => r.res_id).sort().join(), 'by resource: one row per server: ' + s.length + '/' + SV.length);
-    ok(await g.evaluate(() => [...document.querySelectorAll('#px-servers thead th')].map(t => t.textContent).join('|')) === 'Server|Engine / version|Account|Region|Parameter group|Fails (H/M/L)|Overrides|Status', 'server columns');
+    ok(await g.evaluate(() => [...document.querySelectorAll('#px-servers thead th')].map(t => t.textContent).join('|')) === 'Server|Engine / version|Account|Region|Global cluster|Parameter group|Fails (H/M/L)|Overrides|Status', 'server columns');
     const badge = await g.evaluate(() => document.getElementById('tab-parameters-n').textContent);
     ok(badge === String(BLON ? R.reduce((a, r) => a + dev(r), 0) : 0), 'tab badge = baseline failures: ' + badge);
     const key = f => f[0] * 1e6 + f[1] * 1e3 + f[2], ks = s.map(x => key(x.fails));
     ok(ks.every((k, i) => i === 0 || ks[i - 1] >= k), 'failures first (high, medium, low): ' + ks);
-    ok(s.every(x => (sdev(SV.find(r => r.res_id === x.id)) > 0) === /fail/.test(x.cells[7])), 'status column = fail count or OK');
+    ok(s.every(x => (sdev(SV.find(r => r.res_id === x.id)) > 0) === /fail/.test(x.cells[8])), 'status column = fail count or OK');
     ok(await g.evaluate(() => document.querySelectorAll('tr.sdrow').length === 0), 'rows collapsed until clicked');
     // expand a cluster with members
     const c1 = SV.find(r => r.type === 'cluster' && rowsOf(r).length > 1) || SV[0];

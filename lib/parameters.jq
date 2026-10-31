@@ -39,6 +39,8 @@ def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable
 | ([$PR[] | . as $r | .params.defaults[] | {key: "\($r.account)|\($r.region)|\(.kind)|\(.family)", value: ([(.parameters // [])[] | {key: .Name, value: pv}] | from_entries)}] | from_entries) as $DF
 | ([$PR[] | "\(.account)|\(.region)"] | map({key: ., value: true}) | from_entries) as $HAS
 | ([.resources[] | select(.type == "cluster") | {key: .id, value: .}] | from_entries) as $CLR
+# global cluster role (primary / secondary) of each scanned cluster, from describe-global-clusters (already collected)
+| ([.resources[] | select(.type == "global") | .d.members[] | select(.id != null) | {key: .id, value: .role}] | from_entries) as $GROLE
 | def gid($r; $kind; $name): if $name == null then null else "\($r.account)|\($r.region)|\($kind)|\($name)" end;
   def dflt($r; $kind; $g): if $g == null or $g.family == null or $g.error != null then {} else ($DF["\($r.account)|\($r.region)|\($kind)|\($g.family)"] // {}) end;
   def cval($r; $cg): ($GI[$cg // ""] // null) as $g | ($g.values // {}) as $gv | dflt($r; "cluster"; $g) as $d
@@ -54,7 +56,7 @@ def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable
   [.resources[] | select(.type != "global" and $HAS["\(.account)|\(.region)"] and (.engine | test("^(docdb|neptune)") | not)) | . as $r
    | ($r.engine | section) as $sec
    | if .type == "cluster" then gid($r; "cluster"; $r.d.param_group) as $cg
-       | {res_id: .id, name, type, account, region, engine, class, section: $sec, cluster_id: null, global: ($r.d.global.name // null),
+       | {res_id: .id, name, type, account, region, engine, class, section: $sec, cluster_id: null, global: ($r.d.global.name // null), global_role: ($GROLE[$r.id] // null),
           cluster_group: $cg, instance_group: null, apply_status: null, group_error: ($GI[$cg // ""].error // null),
           values: (cval($r; $cg) | finish($r; $sec))}
      else gid($r; "instance"; ($r.d.param_groups[0].name // null)) as $ig
@@ -62,7 +64,7 @@ def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable
        | (if $c then gid($c; "cluster"; $c.d.param_group) else null end) as $cg
        | ([($c.raw.DBClusterMembers // [])[] | select(.DBInstanceIdentifier == $r.name) | .DBClusterParameterGroupStatus][0]) as $cst
        | {res_id: .id, name, type, account, region, engine, class, section: $sec, cluster_id: ($c.id // null), cluster_name: ($c.name // $r.d.cluster.name // null),
-          global: ($r.d.global.name // null), cluster_group: $cg, instance_group: $ig,
+          global: ($r.d.global.name // ($c.d.global.name // null)), global_role: ($GROLE[$c.id // ""] // null), cluster_group: $cg, instance_group: $ig,
           apply_status: ($r.d.param_groups[0].status // null), cluster_apply_status: $cst,
           group_error: ([$GI[$ig // ""].error, $GI[$cg // ""].error] | map(select(. != null)) | .[0] // null),
           values: ((if $c then cval($c; $cg) else {} end) as $cv | ival($r; $ig) as $iv
@@ -92,8 +94,9 @@ def pv: {v: .ParameterValue, src: .Source, apply: .ApplyType, mod: .IsModifiable
     notes: ["Oracle: sqlnet encryption / checksum (NATIVE_NETWORK_ENCRYPTION) is set in the option group, not the parameter group; the option group names are shown.",
             "\u2248 values are approximate: DBInstanceClassMemory is estimated from the instance class (AWS reserves part of it); omitted when the class is unknown."]}
 | .meta.csv_columns.parameters = ["Account", "Region", "Resource", "Resource type", "Cluster", "Engine", "Parameter", "Value", "Approx. computed",
-                                  "Source", "From", "Parameter group", "Non-default", "Apply type", "Apply status"]
+                                  "Source", "From", "Parameter group", "Non-default", "Apply type", "Apply status",
+                                  "Global cluster", "Global role"]
 | .parameters.csv = [$ROWS[] | . as $r | .values | to_entries[] | .key as $n | .value as $v
     | [$r.account, $r.region, $r.name, $r.type, ($r.cluster_name // ""), $r.engine, $n, ($v.v // ""), ($v.approx // "" | tostring),
        ($v.src // ""), ($v.from // ""), ($v.group // "" | split("|") | last), (if $v.nondef then "yes" else "no" end),
-       ($v.apply // ""), ([$r.apply_status, $r.cluster_apply_status] | map(select(. != null)) | join(" / "))]]
+       ($v.apply // ""), ([$r.apply_status, $r.cluster_apply_status] | map(select(. != null)) | join(" / ")), ($r.global // ""), ($r.global_role // "")]]

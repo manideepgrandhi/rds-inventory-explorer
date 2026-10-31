@@ -40,6 +40,7 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   const chip = await g.evaluate(() => { const c = document.getElementById('bl-chip'); return c && {t: c.textContent, title: c.title}; });
   ok(chip && chip.t.includes(BL.file) && chip.t.includes(BL.sha_short) && chip.t.includes(BL.totals.off + ' of ' + BL.totals.resources) && chip.t.includes(sv[0] + ' high, ' + sv[1] + ' medium, ' + sv[2] + ' low'), 'header chip summary: ' + (chip && chip.t));
   ok(chip && BL.accounts.every(a => chip.title.includes(a.account) && chip.title.includes(a.off + ' of ' + a.resources)), 'header chip title: per-account summary');
+  ok(chip && (BL.totals.xregion ? chip.t.includes(BL.totals.xregion + ' cross-region mismatch') : !/cross-region/.test(chip.t)), 'header chip: cross-region mismatch count');
   ok(chip && (BL.totals.overridden ? chip.t.includes(BL.totals.overridden + ' overridden at instance') : true) && (BL.legacy_postgres ? /legacy postgres/.test(chip.t) : !/legacy postgres/.test(chip.t)), 'header chip: overrides + legacy note');
   await shot('00_header_chip.png');
   await g.click('#bl-chip'); await sleep(250);
@@ -53,7 +54,7 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   ok(await g.evaluate(() => document.getElementById('xf-level').hidden), 'Level hidden in By resource');
   ok(!R.some(r => r.type === 'member' && r.section === 'aurora-postgresql' && CL.has(r.cluster_id) && r.bl && r.bl.results.length), 'Aurora PostgreSQL members carry no results');
   const okRow = s.find(x => sdev(SV.find(r => r.res_id === x.id)) === 0 && SV.find(r => r.res_id === x.id).bl && SV.find(r => r.res_id === x.id).bl.results.length);
-  ok(!okRow || /OK/.test(okRow.cells[7]), 'clean server shows OK');
+  ok(!okRow || /OK/.test(okRow.cells[8]), 'clean server shows OK');
   await shot('01_by_resource_desktop.png');
   // expanded failing server: rules, failures first, expected values from the data
   const fs0 = SV.find(r => r.bl && r.bl.dev > 0);
@@ -69,7 +70,7 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   if (ov) {
     await nav('#tab=parameters&res=' + encodeURIComponent(ov.res_id));
     const o = await g.evaluate(id => { const tr = document.querySelector('tr.srow[data-res="' + id + '"]'), d = document.querySelector('tr.sdrow[data-for="' + id + '"]');
-      return {cell: tr.cells[6].textContent, notes: d.querySelectorAll('.rtab .ovnote').length, ot: d.querySelectorAll('.otab tbody tr').length}; }, ov.res_id);
+      return {cell: tr.cells[7].textContent, notes: d.querySelectorAll('.rtab .ovnote').length, ot: d.querySelectorAll('.otab tbody tr').length}; }, ov.res_id);
     ok(o.cell.includes('on ' + ov.bl.overridden + ' instance'), 'Overrides column ' + o.cell);
     ok(o.notes === ov.bl.results.filter(x => x.overrides && x.overrides.length).length && o.notes > 0, 'grey "overridden on N" notes in the rule table ' + o.notes);
     ok(o.ot === ov.bl.overrides.length, 'override table lists every instance override ' + o.ot);
@@ -83,10 +84,38 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   const am = R.find(r => r.type === 'member' && r.section === 'aurora-postgresql' && CL.has(r.cluster_id));
   if (am) { await nav('#id=' + encodeURIComponent(am.res_id));
     ok(await g.evaluate(() => { const c = document.getElementById('card-bl'); return c && /checked once per cluster/.test(c.textContent) && !!c.querySelector('a'); }), 'Aurora PostgreSQL member card: checked on the cluster'); }
-  // instance-level status label
-  const il = SV.find(r => r.bl && r.bl.results.some(x => x.status === 'instance-level'));
-  if (il) { await nav('#tab=parameters&res=' + encodeURIComponent(il.res_id));
-    ok(await g.evaluate(() => /Instance-level, not checked/.test(document.querySelector('tr.sdrow').textContent)), 'instance-level status shown'); }
+  // Aurora PostgreSQL: a baseline parameter with no cluster-level value fails (no "instance-level, not checked" any more)
+  ok(!R.some(r => r.bl && r.bl.results.some(x => x.status === 'instance-level')), 'no instance-level status');
+  const ns = SV.find(r => r.section === 'aurora-postgresql' && r.bl && r.bl.results.some(x => x.why === 'not set in cluster parameter group'));
+  ok(!!ns, 'an Aurora cluster fails "not set in cluster parameter group"');
+  if (ns) { await nav('#tab=parameters&res=' + encodeURIComponent(ns.res_id));
+    const t = await g.evaluate(id => { const d = document.querySelector('tr.sdrow[data-for="' + id + '"]'); return d ? d.textContent : ''; }, ns.res_id);
+    ok(/Not set in cluster parameter group - fails/.test(t) && !/Instance-level/.test(t), 'cluster FAIL "not set in cluster parameter group" shown');
+    ok(ns.bl.results.filter(x => x.why === 'not set in cluster parameter group').every(x => x.status === 'fail'), 'not set at cluster level = fail');
+    await g.evaluate(id => document.querySelector('tr.sdrow[data-for="' + id + '"]').scrollIntoView(), ns.res_id); await shot('06_cluster_not_set_fail.png'); }
+  // global clusters: Global cluster column + filter, cross-region mismatch flag + filter
+  const GLS = [...new Set(SV.map(r => r.global).filter(Boolean))];
+  await nav('#tab=parameters');
+  const gopts = await g.evaluate(() => [...document.querySelectorAll('#xf-global option')].map(o => o.value).filter(Boolean));
+  ok(gopts.length === GLS.length && GLS.every(x => gopts.includes(x)), 'Global cluster filter options ' + gopts.join());
+  ok(await g.evaluate(() => [...document.querySelectorAll('#px-servers thead th')].map(t => t.textContent).includes('Global cluster')), 'Global cluster column');
+  if (GLS.length) {
+    await nav('#tab=parameters&gc=' + encodeURIComponent(GLS[0])); s = await vis();
+    ok(s.length > 0 && s.map(x => x.id).sort().join() === SV.filter(r => r.global === GLS[0]).map(r => r.res_id).sort().join(), 'Global cluster filter');
+    ok(s.every(x => x.cells[4].includes(GLS[0])), 'Global cluster cell');
+    await shot('07_global_cluster_filter.png');
+  }
+  const XR = SV.filter(r => r.bl && r.bl.xr > 0);
+  ok(BL.totals.xregion === XR.length, 'xregion total');
+  await nav('#tab=parameters&sh=xregion'); s = await vis();
+  ok(s.map(x => x.id).sort().join() === XR.map(r => r.res_id).sort().join(), 'Show: cross-region mismatch ' + s.length);
+  if (XR.length) {
+    ok(s.every(x => /cross-region mismatch/.test(x.cells[8])), 'cross-region pill in Status');
+    await expand(XR[0].res_id);
+    const xn = await g.evaluate(id => { const d = document.querySelector('tr.sdrow[data-for="' + id + '"]'); return [...d.querySelectorAll('.rtab .xrnote')].map(e => e.title); }, XR[0].res_id);
+    ok(xn.length === XR[0].bl.xr && xn.every(t => /differs (from primary|on secondary) .+ \(.+\): /.test(t)), 'cross-region notes ' + xn.join(' | '));
+    await shot('08_cross_region_filter.png');
+  }
   // Baseline parameter list: only the rules of the chosen engine
   await nav('#tab=parameters');
   const allOpts = await g.evaluate(() => [...document.querySelectorAll('#xf-bparam option')].map(o => o.value).filter(Boolean));
@@ -104,7 +133,7 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   await nav('#tab=parameters&pe=' + encodeURIComponent(sec0) + '&bp=' + encodeURIComponent(r0.family + '|' + r0.param));
   const bt = await g.evaluate(() => ({cols: [...document.querySelectorAll('#bp-table thead th')].map(t => t.textContent).join('|'), cnt: (document.getElementById('bp-count') || {}).textContent || '',
     st: [...document.querySelectorAll('#bp-table tbody tr')].map(tr => tr.className), sel: document.getElementById('xf-bparam').value}));
-  ok(bt.cols === 'Account|Region|Resource|Engine / version|Actual|Expected|Status|Comes from', 'fleet table columns ' + bt.cols);
+  ok(bt.cols === 'Account|Region|Resource|Engine / version|Global cluster|Actual|Expected|Status|Comes from', 'fleet table columns ' + bt.cols);
   const want = R.filter(r => r.section === sec0 && famMatch(r0.family, r.section) && r.bl && r.bl.results.some(x => x.param === r0.param));
   const nf = want.filter(r => r.bl.results.some(x => x.param === r0.param && isDev(x))).length;
   ok(bt.st.length === want.length && bt.st.filter(c => /r-bad/.test(c)).length === nf && new RegExp('^' + want.length + ' resources: .*' + nf + ' fail').test(bt.cnt), 'fleet table rows/counts ' + bt.cnt);
@@ -137,6 +166,7 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
   for (const h of ['#tab=parameters', '#tab=parameters&res=' + encodeURIComponent((ov || fs0).res_id), '#tab=parameters&bp=' + encodeURIComponent(r0.family + '|' + r0.param)]) {
     await nav(h); ok(await g.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'mobile: no horizontal scroll ' + h);
     if (h === '#tab=parameters') await shot('05_by_resource_mobile.png');
+    if (h.includes('res=')) await shot('09_expanded_mobile.png');
   }
   ok(!errs.length, 'js errors: ' + errs.join(' | ')); ok(!net.length, 'network: ' + net.join(' '));
   await b.close();
