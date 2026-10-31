@@ -154,6 +154,23 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
 tr.bl-row-fail td,tr.bl-row-missing td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}
 .chip.bl-chip{cursor:pointer;white-space:normal}
 @media (max-width:760px){.pmem{margin-left:12px}.seg{flex-wrap:wrap}}
+#px-q{flex:1 1 260px;min-width:180px;max-width:420px}
+.plegend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--muted);margin:0 0 10px}
+.plegend span{display:inline-flex;align-items:center;gap:5px}.sw{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--border)}
+.sw.s-bad,.st-bad{background:var(--bad-bg);color:var(--bad)}.sw.s-warn,.st-warn{background:var(--warn-bg);color:var(--warn)}.sw.s-na,.st-na{background:var(--panel2);color:var(--muted)}
+.st{display:inline-block;padding:0 7px;border-radius:5px;font-size:12px;font-weight:600;white-space:nowrap}.st-ok{color:var(--ok)}
+tr.r-bad td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}tr.r-warn td{background:color-mix(in srgb,var(--warn-bg) 55%,transparent)}tr.r-na td{color:var(--muted)}
+.pblsum{font-size:12.5px;color:var(--muted);margin:0 0 8px;display:flex;flex-wrap:wrap;gap:4px 16px}
+.prow{cursor:pointer;user-select:none}.prow:hover{background:var(--panel2)}.prow .tw{display:inline-block;width:14px;color:var(--muted)}
+.pres.p-bad,.pres.p-warn{background:var(--panel);color:var(--text)}.pres.p-bad{border-left:3px solid var(--bad)}.pres.p-warn{border-left:3px solid var(--warn)}
+.pmembers{margin:0 0 10px 28px}.mtoggle{font-size:12.5px;margin:0 0 8px 28px}
+.pdiff{outline:1px dashed var(--warn)}.cmp{font-size:12px;margin-left:6px}
+.cmpbox{padding:8px 10px;background:var(--panel2);border-radius:6px;margin:4px 0}
+.cmpbox .cv{margin:2px 0}.pcount{margin:0 0 8px;font-size:13px}
+.ind{padding-left:22px}
+@media (max-width:760px){.pmembers,.mtoggle{margin-left:12px}#px-q{max-width:none}}
+.ptab code,.cmpbox code{color:inherit}
+.linkbtn{border:0;background:none;color:var(--accent);padding:0;cursor:pointer;font:inherit}
 @media (max-width:700px){dl{grid-template-columns:1fr}dt{margin-top:6px}}
 </style>
 </head>
@@ -207,19 +224,17 @@ tr.bl-row-fail td,tr.bl-row-missing td{background:color-mix(in srgb,var(--bad-bg
   <button type="button" id="in-csv" class="export" title="Download the findings shown (filters) as CSV">Export CSV</button>
 </div>
 <div class="toolbar" id="px-toolbar" hidden>
-  <span class="seg" role="group" aria-label="Parameters view"><button type="button" id="pv-resource">By resource</button><button type="button" id="pv-group">By parameter group</button><button type="button" id="pv-drift">Drift</button></span>
+  <span class="seg" role="group" aria-label="Parameters view"><button type="button" id="pv-resource">By resource</button><button type="button" id="pv-group">By parameter group</button></span>
+  <input type="search" id="px-q" placeholder="Search cluster, instance, group, parameter or value  ( / )" aria-label="Search parameters" autocomplete="off" spellcheck="false">
   <select id="xf-account" aria-label="Account"></select>
   <select id="xf-region" aria-label="Region"></select>
   <select id="xf-engine" aria-label="Engine"></select>
-  <select id="xf-group" aria-label="Parameter group"></select>
-  <select id="xf-param" aria-label="Parameter"></select>
-  <label class="chk"><input type="checkbox" id="xf-nondef"> non-default only</label>
-  <label class="chk"><input type="checkbox" id="xf-flag"> flagged only</label>
-  <label class="chk" id="xf-off-wrap"><input type="checkbox" id="xf-off"> off-baseline only</label>
-  <select id="xf-bsev" aria-label="Baseline severity"></select>
+  <select id="xf-level" aria-label="Level"><option value="">Level: all (effective values)</option><option value="cluster">Level: cluster group</option><option value="instance">Level: instance group</option></select>
+  <select id="xf-bparam" aria-label="Baseline parameter"></select>
+  <select id="xf-show" aria-label="Show"><option value="">Show: all parameters</option><option value="problems">Show: problems only</option><option value="changed">Show: changed from default</option></select>
   <button type="button" id="xclear">Clear</button>
-  <button type="button" id="px-csv" class="export" title="Download the current Parameters view (filters) as CSV">Export CSV</button>
-  <button type="button" id="px-bcsv" class="export" title="Download the baseline results shown (filters) as CSV - same columns as the script's _baseline.csv">Baseline CSV</button>
+  <button type="button" id="px-csv" class="export" title="Download what is on screen (view, filters, level, search) as CSV">Export CSV</button>
+  <button type="button" id="px-bcsv" class="export2" title="Download the baseline results shown as CSV - same columns as the script's _baseline.csv">Baseline CSV</button>
 </div>
 <main>
   <div id="view"></div>
@@ -281,7 +296,7 @@ tr.bl-row-fail td,tr.bl-row-missing td{background:color-mix(in srgb,var(--bad-bg
   function mkHash(o) {
     var parts = [];
     if (o.tab === 'pending' || o.tab === 'insights' || o.tab === 'parameters') parts.push('tab=' + o.tab);
-    ['id', 'res', 'f', 'fv', 'pv', 'grp'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
+    ['id', 'res', 'f', 'fv', 'pv', 'grp', 'pq', 'pa', 'pr', 'pe', 'lv', 'bp', 'sh', 'cmp'].forEach(function (k) { if (o[k]) parts.push(k + '=' + encodeURIComponent(o[k])); });
     return parts.length ? '#' + parts.join('&') : '';
   }
   function go(o) {
@@ -557,7 +572,7 @@ tr.bl-row-fail td,tr.bl-row-missing td{background:color-mix(in srgb,var(--bad-bg
     else if (e.key === 'Escape') { closeSugg(); if (current()) { history.pushState(null, '', location.pathname + location.search); render(); } }
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === '/' && document.activeElement !== q && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); q.select(); }
+    if (e.key === '/' && document.activeElement !== q && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); var tq = hp().tab === 'parameters' ? $('px-q') : q; tq.focus(); tq.select(); }
   });
   Object.keys(F).forEach(function (k) {
     F[k].addEventListener('change', function () {
@@ -790,263 +805,347 @@ tr.bl-row-fail td,tr.bl-row-missing td{background:color-mix(in srgb,var(--bad-bg
     $('tab-pending').appendChild(b);
   })();
 
-  /* ---------- Parameters tab (--with-parameters): by resource / by parameter group / drift ---------- */
+  /* ---------- Parameters tab (--with-parameters): By resource / By parameter group ---------- */
+  // Hash state: pv=group, grp=<gid>, res=<arn>, pq=<search>, pa/pr/pe=<account/region/engine>, lv=cluster|instance,
+  // sh=problems|changed, bp=<family|param> (fleet table for one baseline parameter), cmp=<param> (compare panel)
   var PA = DATA.parameters || { collected: false, rows: [], groups: [], drift: [], csv: [], notes: [], not_collected: [] };
-  var PROWS = PA.rows || [], PGRP = PA.groups || [], PDRIFT = PA.drift || [];
+  var PROWS = PA.rows || [], PGRP = PA.groups || [];
   var GBY = {}; PGRP.forEach(function (g) { GBY[g.gid] = g; });
   var PCSV = [], pOff = 0;   // the script's CSV rows (lib/parameters.jq) for each resource row, same order
   PROWS.forEach(function (r) { var n = Object.keys(r.values).length; PCSV.push((PA.csv || []).slice(pOff, pOff + n)); pOff += n; });
-  var XF = { account: $('xf-account'), region: $('xf-region'), engine: $('xf-engine'), group: $('xf-group'), param: $('xf-param') };
-  var XC = { nondef: $('xf-nondef'), flagged: $('xf-flag'), off: $('xf-off') };
-  /* baseline (lib/baseline.jq): per-row results {param, expected, actual, status, sev, from, group}; dev = fail + missing */
+  var XF = { account: $('xf-account'), region: $('xf-region'), engine: $('xf-engine'), level: $('xf-level'), bparam: $('xf-bparam'), show: $('xf-show') };
+  var XQ = $('px-q'), XKEY = { account: 'pa', region: 'pr', engine: 'pe', level: 'lv', bparam: 'bp', show: 'sh' };
   var BL = DATA.baseline || { applied: false }, BLON = !!BL.applied, PROW = {};
-  PROWS.forEach(function (r) { PROW[r.res_id] = r; });
+  PROWS.forEach(function (r, i) { r._i = i; PROW[r.res_id] = r; });
   var BCSV = [], bOff = 0;   // the script's baseline CSV rows for each resource row, same order
   PROWS.forEach(function (r) { var n = r.bl ? r.bl.results.length : 0; BCSV.push((BL.csv || []).slice(bOff, bOff + n)); bOff += n; });
-  XF.bsev = $('xf-bsev');
-  XF.bsev.appendChild(h('option', { value: '', text: 'All baseline severities' }));
-  ['high', 'medium', 'low'].forEach(function (x) { XF.bsev.appendChild(h('option', { value: x, text: 'Baseline: ' + x + ' only' })); });
-  if (!BLON) { $('xf-off-wrap').hidden = true; XF.bsev.hidden = true; $('px-bcsv').hidden = true; }
+  if (!BLON) { XF.bparam.hidden = true; $('px-bcsv').hidden = true; }
   var BLSEV = { high: 'High', medium: 'Medium', low: 'Low' };
+  function famOf(sec) { return !sec ? null : /postgres/.test(sec) ? 'postgres' : /mysql/.test(sec) ? 'mysql' : sec; }
   function isDev(x) { return x.status === 'fail' || x.status === 'missing'; }
-  function blRes(r) { return r && r.bl ? r.bl.results.filter(function (x) { return !XF.bsev.value || x.sev === XF.bsev.value; }) : []; }
-  function blCounts(r) {   // {high, medium, low, dev} under the severity filter
-    var c = { high: 0, medium: 0, low: 0, dev: 0 };
-    blRes(r).forEach(function (x) { if (isDev(x)) { c[x.sev]++; c.dev++; } });
-    return c;
+  function blOf(r, k) { return r && r.bl ? r.bl.results.filter(function (b) { return b.param === k; })[0] || null : null; }
+  /* one parameter of one resource -> plain status: bad (fails baseline / security flag), warn (couldn't check), na (doesn't apply), ok, none (no rule) */
+  function pStatus(r, k) {
+    var p = r.values[k], b = BLON ? blOf(r, k) : null, flag = p && p.flag;
+    if ((b && isDev(b)) || flag) return { c: 'bad', t: b && b.status === 'missing' ? 'Not set - fails baseline' : b && b.status === 'fail' ? 'Fails baseline' + (flag ? ' · ' + flag : '') : flag, b: b };
+    if (b && b.status === 'unknown') return { c: 'warn', t: "Couldn't check", b: b };
+    if (b && b.status === 'n/a') return { c: 'na', t: "Doesn't apply", b: b };
+    if (b && b.status === 'pass') return { c: 'ok', t: 'OK', b: b };
+    return { c: 'none', t: 'OK', b: null };
   }
-  function memCounts(r) {   // a cluster row: its members' deviations rolled up
-    var c = { high: 0, medium: 0, low: 0, dev: 0, resources: 0 };
-    if (r.type !== 'cluster') return c;
-    PROWS.forEach(function (m) { if (m.cluster_id === r.res_id) { var k = blCounts(m); if (k.dev) c.resources++; ['high', 'medium', 'low', 'dev'].forEach(function (s) { c[s] += k[s]; }); } });
-    return c;
+  function stPill(s) { return h('span', { cls: 'st st-' + (s.c === 'none' ? 'ok' : s.c), title: s.b ? (s.b.why ? s.b.why + ' · ' : '') + 'baseline line ' + s.b.line + ': ' + s.b.expected + ' (' + s.b.sev + ')' : null, text: s.t }); }
+  function pending(r) { return [r.apply_status, r.cluster_apply_status].some(function (s) { return s && s !== 'in-sync'; }); }
+  function allKeys(r) {   // listed parameters + baseline-only rules (missing / doesn't apply)
+    var ks = Object.keys(r.values);
+    if (BLON && r.bl) r.bl.results.forEach(function (b) { if (ks.indexOf(b.param) < 0) ks.push(b.param); });
+    return ks;
   }
-  function blScore(c) { return c.high * 10000 + c.medium * 100 + c.low; }
-  function blOff(r) { return blCounts(r).dev > 0 || memCounts(r).dev > 0; }
-  function blStatus(x) {
-    var cls = x.status === 'n/a' ? 'na' : x.status;
-    var t = x.status === 'pass' ? '✓ pass' : x.status === 'fail' ? '✗ fail' : x.status;
-    return h('span', { cls: 'bl bl-' + cls, title: (x.why ? x.why + ' · ' : '') + 'baseline line ' + x.line + ': ' + x.expected, text: t });
-  }
-  function blBadges(r, withMembers) {
-    var c = blCounts(r), m = withMembers ? memCounts(r) : null, out = [];
-    if (!r.bl || !r.bl.results.length) return h('span', { cls: 'muted', text: 'no baseline rules' });
-    ['high', 'medium', 'low'].forEach(function (s) { if (c[s]) out.push(h('span', { cls: 'pill ' + (s === 'high' ? 'p-bad' : s === 'medium' ? 'p-warn' : 'p-mute'), title: c[s] + ' ' + s + ' severity deviation(s)', text: c[s] + ' ' + s })); });
-    if (!c.dev) out.push(h('span', { cls: 'pill p-ok', text: 'on baseline' }));
-    if (m && m.dev) out.push(h('span', { cls: 'bdg-mem', title: 'deviations in member instances (high ' + m.high + ', medium ' + m.medium + ', low ' + m.low + ')', text: '+ ' + m.dev + ' in ' + m.resources + ' member(s)' }));
-    return h('span', { cls: 'bdg', 'data-bl-dev': String(c.dev) }, out);
-  }
-  function actualCell(x) {
-    return h('span', null, x.actual == null ? h('span', { cls: 'muted', text: x.status === 'n/a' ? '-' : '(no value)' }) : h('code', { text: x.actual }),
-      x.approx != null ? h('span', { cls: 'muted', text: ' ≈ ' + Number(x.approx).toLocaleString('en-US') }) : null);
-  }
-  function blTable(r, offOnly) {
-    var rs = blRes(r).filter(function (x) { return !offOnly || isDev(x); });
-    if (!rs.length) return h('div', { cls: 'empty pmsg', text: offOnly ? 'On baseline for the rules shown.' : 'No baseline rule for this engine.' });
-    var t = table(['Parameter', 'Expected', 'Actual', 'Status', 'Severity', 'From'], rs.map(function (x) {
-      return [h('code', { text: x.param }), h('span', { text: x.expected }), actualCell(x), blStatus(x), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] }),
-        x.from ? fromCell(r, { from: x.from, group: x.group ? gidOf(r, x.from === 'cluster' ? 'cluster' : 'instance', x.group) : null }) : dash()];
-    }), 'stack ptab bltab');
-    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { tr.className = 'bl-row-' + (rs[i].status === 'n/a' ? 'na' : rs[i].status); });
-    return t;
-  }
-  function blSection(res) {   // the Baseline section of a resource card
-    if (!BLON) return null;
-    var r = PROW[res.id];
-    if (!r) return sec('Baseline', h('span', { cls: 'muted', text: 'No parameter data for this resource.' }), true);
-    return sec('Baseline', h('div', { id: 'card-bl' }, h('div', { cls: 'bdg' }, blBadges(r, true), ' ',
-      h('a', { href: mkHash({ tab: 'parameters', pv: 'drift', res: r.res_id }), text: 'baseline drift view' })), blTable(r, false)), true);
-  }
-  opts(XF.account, 'accounts', uniq(PROWS.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
-  opts(XF.region, 'regions', uniq(PROWS.map(function (r) { return r.region; })).map(function (x) { return [x, x]; }));
-  opts(XF.engine, 'engines', uniq(PROWS.map(function (r) { return r.engine; })).map(function (x) { return [x, x]; }));
-  opts(XF.group, 'parameter groups', PGRP.map(function (g) { return [g.gid, g.name + '  (' + g.kind + ', ' + g.account + ' ' + g.region + ')']; }));
-  opts(XF.param, 'parameters', uniq([].concat.apply([], PROWS.map(function (r) { return Object.keys(r.values); }))).map(function (x) { return [x, x]; }));
+  function problemKeys(r) { return allKeys(r).filter(function (k) { return pStatus(r, k).c === 'bad'; }); }
+  function gidOf(r, kind, name) { return name ? r.account + '|' + r.region + '|' + kind + '|' + name : null; }
   function gidHash(gid) { return mkHash({ tab: 'parameters', pv: 'group', grp: gid }); }
   function grpLink(gid, fallback) {
     var g = gid && GBY[gid];
     if (!g) return fallback ? h('code', { text: fallback }) : dash();
     return h('span', null, h('a', { href: gidHash(gid), 'data-grp': gid, title: 'Open this parameter group', text: g.name }),
-      g.is_default ? [' ', pill('default', 'warn')] : null, g.error ? [' ', pill('not read', 'bad')] : null);
+      g.is_default ? [' ', pill('default group', 'warn')] : null, g.error ? [' ', pill('not read', 'bad')] : null);
   }
-  function gidOf(r, kind, name) { return name ? r.account + '|' + r.region + '|' + kind + '|' + name : null; }
-  function scopeOk(x) { return (!XF.account.value || x.account === XF.account.value) && (!XF.region.value || x.region === XF.region.value); }
-  function pRows() {   // resource rows + the parameter names kept, after the filters
-    return PROWS.map(function (r, i) {
-      if (!scopeOk(r) || (XF.engine.value && r.engine !== XF.engine.value)) return null;
-      if (XF.group.value && r.cluster_group !== XF.group.value && r.instance_group !== XF.group.value) return null;
-      if (BLON && XC.off.checked && !blOff(r)) return null;
-      var ks = Object.keys(r.values).filter(function (k) {
-        var x = r.values[k];
-        return (!XF.param.value || k === XF.param.value) && (!XC.nondef.checked || x.nondef) && (!XC.flagged.checked || x.flag);
-      });
-      if (!ks.length && (XF.param.value || XC.nondef.checked || XC.flagged.checked)) return null;
-      return { r: r, i: i, ks: ks };
-    }).filter(Boolean);
+  function fromCell(r, x) {   // "Instance group <name>" / "Cluster group <name>" / "AWS default"
+    if (!x || !x.from) return dash();
+    var gname = x.group ? String(x.group).split('|').pop() : '', gid = x.group && String(x.group).indexOf('|') > 0 ? x.group : gidOf(r, x.from === 'cluster' ? 'cluster' : 'instance', x.group);
+    if (x.from === 'default') return h('span', { cls: 'from from-default', title: 'Not set in ' + (gname || 'the group') + ': the AWS default for this engine version applies', text: 'AWS default' });
+    return h('span', { cls: 'from from-' + x.from }, x.from === 'instance' ? 'Instance group ' : 'Cluster group ', grpLink(gid, gname),
+      x.src === 'system' ? h('span', { cls: 'muted', text: ' (set by AWS)' }) : null);
   }
-  function pGroups() {
+  function actualCell(p, b) {
+    var v0 = p ? p.v : b ? b.actual : null, ax = p ? p.approx : b ? b.approx : null;
+    return h('span', null, v0 == null ? h('span', { cls: 'muted', text: 'not set' }) : h('code', { cls: p && p.nondef ? 'nd' : null, title: p && p.nondef ? 'changed from default' : null, text: v0 }),
+      ax != null ? h('span', { cls: 'muted', title: 'approximate: DBInstanceClassMemory estimated from the instance class', text: ' ≈ ' + Number(ax).toLocaleString('en-US') }) : null);
+  }
+  // card: Baseline section (kept), links into the Parameters tab
+  function blTable(r) {
+    var rs = r.bl ? r.bl.results : [];
+    if (!rs.length) return h('div', { cls: 'empty pmsg', text: 'No baseline rule for this engine.' });
+    var t = table(['Parameter', 'Actual', 'Expected', 'Status', 'Severity', 'Comes from'], rs.map(function (x) {
+      return [h('code', { text: x.param }), actualCell(r.values[x.param], x), h('span', { text: x.expected }), stPill(pStatus(r, x.param)), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] }),
+        x.from ? fromCell(r, { from: x.from, group: x.group, src: (r.values[x.param] || {}).src }) : dash()];
+    }), 'stack ptab bltab');
+    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { var c = pStatus(r, rs[i].param).c; tr.className = 'bl-row-' + (rs[i].status === 'n/a' ? 'na' : rs[i].status) + (c === 'none' || c === 'ok' ? '' : ' r-' + c); });
+    return t;
+  }
+  function badgeFor(r) {
+    var n = problemKeys(r).length;
+    if (n) return h('span', { cls: 'pill p-bad pst', 'data-problems': String(n), text: n + (n === 1 ? ' problem' : ' problems') });
+    return h('span', { cls: 'pill p-ok pst', 'data-problems': '0', text: 'OK' });
+  }
+  function blSection(res) {
+    if (!BLON) return null;
+    var r = PROW[res.id];
+    if (!r) return sec('Baseline', h('span', { cls: 'muted', text: 'No parameter data for this resource.' }), true);
+    return sec('Baseline', h('div', { id: 'card-bl' }, h('div', { cls: 'bdg' }, badgeFor(r), ' ',
+      h('a', { href: mkHash({ tab: 'parameters', res: r.res_id }), text: 'open in the Parameters tab' })), blTable(r)), true);
+  }
+  opts(XF.account, 'accounts', uniq(PROWS.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
+  opts(XF.region, 'regions', uniq(PROWS.map(function (r) { return r.region; })).map(function (x) { return [x, x]; }));
+  opts(XF.engine, 'engines', uniq(PROWS.map(function (r) { return r.engine; })).map(function (x) { return [x, x]; }));
+  (function () {   // Baseline parameter: rules grouped by engine family
+    XF.bparam.appendChild(h('option', { value: '', text: 'Baseline parameter: any' }));
+    var by = {}; (BL.rule_list || []).forEach(function (x) { (by[x.family] = by[x.family] || []).indexOf(x.param) < 0 && by[x.family].push(x.param); });
+    var FN = { postgres: 'PostgreSQL (Aurora + RDS)', mysql: 'MySQL / Aurora MySQL', sqlserver: 'SQL Server', oracle: 'Oracle' };
+    Object.keys(by).forEach(function (f) {
+      XF.bparam.appendChild(h('optgroup', { label: FN[f] || f }, by[f].map(function (p) { return h('option', { value: f + '|' + p, text: p }); })));
+    });
+  })();
+  function pv() { return hp().pv === 'group' ? 'group' : 'resource'; }
+  function pState() { var o = hp(), s = { q: (o.pq || '').trim().toLowerCase(), cmp: o.cmp || '' }; Object.keys(XKEY).forEach(function (k) { s[k] = o[XKEY[k]] || ''; }); return s; }
+  function pHash(over) {   // current tab state + changes
+    var o = hp(), x = { tab: 'parameters', pv: o.pv === 'group' ? 'group' : '', grp: o.grp, res: o.res, pq: XQ.value, cmp: o.cmp };
+    Object.keys(XKEY).forEach(function (k) { x[XKEY[k]] = XF[k].value; });
+    for (var k in over) if (Object.prototype.hasOwnProperty.call(over, k)) x[k] = over[k];
+    return x;
+  }
+  function pSet(over, replace) { var hs = mkHash(pHash(over)); if (replace) { history.replaceState(null, '', hs || location.pathname); render(); } else go(pHash(over)); }
+  function scopeOk(x, s) { return (!s.account || x.account === s.account) && (!s.region || x.region === s.region); }
+  function rowIn(r, s) { return scopeOk(r, s) && (!s.engine || r.engine === s.engine); }
+  function levelRow(r, s) { return !s.level ? true : s.level === 'cluster' ? r.type === 'cluster' : r.type !== 'cluster'; }
+  function levelKey(r, k, s) {   // Instance group level: only what the instance parameter group holds (or its default)
+    if (s.level !== 'instance' || r.type === 'instance' || !r.cluster_id) return true;
+    var p = r.values[k], b = blOf(r, k);
+    return p ? p.group === r.instance_group : b ? b.from !== 'cluster' : true;
+  }
+  function hayRow(r) { return [r.name, r.cluster_name, r.cluster_group && r.cluster_group.split('|').pop(), r.instance_group && r.instance_group.split('|').pop()].join(' ').toLowerCase(); }
+  function hayKey(r, k) { var p = r.values[k], b = blOf(r, k); return (k + ' ' + (p && p.v != null ? p.v : b && b.actual != null ? b.actual : '')).toLowerCase(); }
+  function showKey(r, k, s) {
+    if (s.show === 'problems') return pStatus(r, k).c === 'bad';
+    if (s.show === 'changed') return !!(r.values[k] && r.values[k].nondef);
+    return true;
+  }
+  function keysFor(r, s) {   // visible parameter names of a resource row, or null when the row is hidden
+    if (!rowIn(r, s) || !levelRow(r, s)) return null;
+    var rowHit = !s.q || hayRow(r).indexOf(s.q) >= 0;
+    var ks = allKeys(r).filter(function (k) { return levelKey(r, k, s) && showKey(r, k, s) && (rowHit || hayKey(r, k).indexOf(s.q) >= 0); });
+    if (!ks.length && (s.show || !rowHit)) return null;
+    return ks;
+  }
+  function siblingsDiffer(r) {   // a member whose instance group differs from the one most members of its cluster use
+    if (r.type !== 'member' || !r.cluster_id) return false;
+    var ms = PROWS.filter(function (m) { return m.cluster_id === r.cluster_id; }), n = {}, best = null;
+    ms.forEach(function (m) { n[m.instance_group] = (n[m.instance_group] || 0) + 1; if (best === null || n[m.instance_group] > n[best]) best = m.instance_group; });
+    return Object.keys(n).length > 1 && r.instance_group !== best;
+  }
+  function units(s) {   // [{c: cluster row | null, cks, mem: [{r, ks}], score}] in display order: problems first
+    var out = [], byC = {};
+    PROWS.forEach(function (r) {
+      if (r.type === 'cluster') { var u = { c: r, cks: keysFor(r, s), mem: [] }; byC[r.res_id] = u; out.push(u); }
+      else if (r.cluster_id && byC[r.cluster_id]) { var ks = keysFor(r, s); if (ks) byC[r.cluster_id].mem.push({ r: r, ks: ks }); }
+      else { var ks2 = keysFor(r, s); if (ks2) out.push({ c: null, cks: null, mem: [{ r: r, ks: ks2 }] }); }
+    });
+    out = out.filter(function (u) { return u.cks || u.mem.length; });
+    out.forEach(function (u, i) {
+      u.mem.forEach(function (m) { m.n = problemKeys(m.r).length; });
+      u.mem.sort(function (a, b) { return b.n - a.n || a.r._i - b.r._i; });
+      u.score = (u.c ? problemKeys(u.c).length : 0) + u.mem.reduce(function (a, m) { return a + m.n; }, 0); u.i = i;
+    });
+    return out.sort(function (a, b) { return (b.score > 0) - (a.score > 0) || b.score - a.score || a.i - b.i; });
+  }
+  var OPEN = {}, MCLOSED = {};   // expanded resource rows / collapsed member lists (session only)
+  function cmpPanel(r, k, s) {   // one parameter across same-engine resources (scope filters apply)
+    var vals = {}, order = [];
+    PROWS.forEach(function (x) {
+      if (x.section !== r.section || !scopeOk(x, s) || !x.values[k]) return;
+      var v0 = x.values[k].v == null ? '(empty)' : x.values[k].v;
+      if (!vals[v0]) { vals[v0] = []; order.push(v0); } vals[v0].push(x);
+    });
+    return h('div', { cls: 'cmpbox', 'data-cmp': k }, h('div', { cls: 'muted', text: k + ' on ' + r.section + ' resources' + (order.length > 1 ? ': ' + order.length + ' different values' : ': same value everywhere') }),
+      order.map(function (v0) {
+        return h('div', { cls: 'cv' }, h('code', { text: v0 }), ' - ', vals[v0].map(function (x, j) { return [j ? ', ' : '', h('a', { href: mkHash(pHash({ res: x.res_id, cmp: k })), text: x.name, cls: x === r ? 'self' : null })]; }));
+      }));
+  }
+  function detailTable(r, ks, s) {
+    if (r.group_error) return h('div', { cls: 'empty pmsg', text: 'Parameter group could not be read: ' + r.group_error });
+    if (!ks.length) return h('div', { cls: 'empty pmsg', text: r.section ? 'No listed parameter for this resource at this level.' : 'This engine is not in lib/parameters.list.' });
+    var rows = [], cls = [];
+    ks.forEach(function (k) {
+      var p = r.values[k], st = pStatus(r, k), b = st.b || (BLON ? blOf(r, k) : null);
+      rows.push([h('span', null, h('code', { text: k }), p ? h('a', { cls: 'cmp', href: mkHash(pHash({ res: r.res_id, cmp: s.cmp === k ? '' : k })), 'data-cmpk': k, title: 'Compare across clusters', text: 'compare' }) : null),
+        actualCell(p, b), b ? h('span', { text: b.expected }) : h('span', { cls: 'muted', text: 'no rule' }), stPill(st), p ? fromCell(r, p) : b && b.from ? fromCell(r, { from: b.from, group: b.group }) : dash()]);
+      cls.push(st.c === 'bad' || st.c === 'warn' || st.c === 'na' ? 'r-' + st.c : '');
+    });
+    var t = table(['Parameter', 'Actual', 'Expected', 'Status', 'Comes from'], rows, 'stack ptab');
+    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) {
+      tr.className = cls[i]; tr.setAttribute('data-k', ks[i]);
+      if (s.cmp === ks[i] && hp().res === r.res_id) { var c = h('tr', { cls: 'cmprow' }, h('td', { colspan: '5' }, cmpPanel(r, ks[i], s))); tr.parentNode.insertBefore(c, tr.nextSibling); }
+    });
+    return t;
+  }
+  function resPanel(r, ks, s, isMember) {
+    var open = !!OPEN[r.res_id] || hp().res === r.res_id, n = problemKeys(r).length, pend = pending(r), diff = s.level === 'instance' && siblingsDiffer(r);
+    var meta = [h('span', null, h('code', { text: r.account }), ' ' + r.region), h('span', { text: r.engine + (BY[r.res_id] && BY[r.res_id].version ? ' ' + BY[r.res_id].version : '') + (r.class ? ' · ' + r.class : '') }),
+      r.global ? h('span', { text: 'global ' + r.global }) : null,
+      r.cluster_group && s.level !== 'instance' ? h('span', null, 'cluster group ', grpLink(r.cluster_group)) : null,
+      r.instance_group && s.level !== 'cluster' ? h('span', null, 'instance group ', grpLink(r.instance_group), diff ? ' ' : null, diff ? pill('differs from other members', 'warn') : null) : null];
+    var head = h('div', { cls: 'phead prow', role: 'button', tabindex: '0', 'aria-expanded': String(open), onclick: function (e) { if (e.target.closest('a')) return; OPEN[r.res_id] = !open; if (!OPEN[r.res_id] && hp().res === r.res_id) pSet({ res: '', cmp: '' }, true); else render(); },
+      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.click(); } } },
+      h('span', { cls: 'tw', text: open ? '▾' : '▸' }), badge(r.type), ' ', link(r.res_id, r.name), ' ', badgeFor(r), pend ? [' ', h('span', { cls: 'pill p-warn', title: 'a parameter change is waiting for a reboot', text: 'pending reboot' })] : null,
+      h('span', { cls: 'muted', text: ' ' + ks.length + ' parameter(s)' }), h('span', { cls: 'pmeta' }, meta));
+    return h('div', { cls: 'panel pres' + (isMember ? ' pmem' : '') + (n ? ' p-bad' : pend ? ' p-warn' : '') + (diff ? ' pdiff' : ''), 'data-res': r.res_id, 'data-open': String(open) }, head, open ? detailTable(r, ks, s) : null);
+  }
+  function legend() {
+    return h('div', { cls: 'plegend', id: 'px-legend' }, h('span', null, h('i', { cls: 'sw s-bad' }), 'red: fails the baseline or a security rule'),
+      h('span', null, h('i', { cls: 'sw s-warn' }), "yellow: pending reboot or couldn't check"), h('span', null, h('i', { cls: 'sw s-na' }), "grey: doesn't apply"),
+      h('span', null, h('i', { cls: 'sw' }), 'no colour: OK'), h('span', null, h('code', { cls: 'nd', text: 'value' }), ' changed from default'));
+  }
+  function blSummary() {
+    if (!BLON) return null;
+    return h('div', { cls: 'pblsum', id: 'bl-summary' }, h('span', { text: 'Baseline ' + BL.file + ' (' + BL.rules + ' rules):' }), (BL.accounts || []).map(function (a) {
+      return h('span', { 'data-acc': a.account, text: a.account + (profOf[a.account] ? ' (' + profOf[a.account].join(', ') + ')' : '') + ': ' + a.off + ' of ' + a.resources + ' off baseline · ' + a.high + ' high, ' + a.medium + ' medium, ' + a.low + ' low' });
+    }));
+  }
+  /* fleet table for one baseline parameter */
+  var STORD = { bad: 0, warn: 1, ok: 2, none: 2, na: 3 };
+  function bpRows(s) {
+    var fp = s.bparam.split('|'), fam = fp[0], k = fp.slice(1).join('|'), out = [];
+    units(Object.assign({}, s, { q: '', show: '' })).forEach(function (u) {
+      var rs = (u.c && u.cks ? [u.c] : []).concat(u.mem.map(function (m) { return m.r; }));
+      var list = rs.filter(function (r) {
+        if (famOf(r.section) !== fam || !blOf(r, k) || !levelKey(r, k, s)) return false;
+        if (s.q && hayRow(r).indexOf(s.q) < 0 && hayKey(r, k).indexOf(s.q) < 0) return false;
+        return showKey(r, k, s);
+      }).map(function (r) { return { r: r, st: pStatus(r, k), b: blOf(r, k), member: !!(u.c && r !== u.c) }; });
+      if (list.length) out.push({ list: list, w: Math.min.apply(null, list.map(function (x) { return STORD[x.st.c]; })), i: out.length });
+    });
+    out.sort(function (a, b) { return a.w - b.w || a.i - b.i; });
+    return { k: k, fam: fam, rows: [].concat.apply([], out.map(function (x) { return x.list; })) };
+  }
+  function renderBp(view, s) {
+    var x = bpRows(s), c = { ok: 0, bad: 0, warn: 0, na: 0 };
+    x.rows.forEach(function (y) { c[y.st.c === 'none' ? 'ok' : y.st.c]++; });
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', null, 'Baseline parameter ', h('code', { text: x.k })), h('span', { cls: 'muted', id: 'px-shown', text: x.fam + ' resources' })));
+    view.appendChild(h('div', { cls: 'pcount', id: 'bp-count', text: x.rows.length + ' resources: ' + c.ok + ' OK, ' + c.bad + ' fail' + (c.warn ? ', ' + c.warn + " couldn't check" : '') + (c.na ? ', ' + c.na + " doesn't apply" : '') }));
+    if (!x.rows.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
+    var t = table(['Account', 'Region', 'Resource', 'Engine / version', 'Actual', 'Expected', 'Status', 'Comes from'], x.rows.map(function (y) {
+      var r = y.r, res = BY[r.res_id];
+      return [h('code', { text: r.account }), r.region, h('span', { cls: y.member ? 'ind' : null }, badge(r.type), ' ', h('a', { href: mkHash(pHash({ bp: '', res: r.res_id })), title: 'Open in By resource', text: r.name })),
+        r.engine + (res && res.version ? ' ' + res.version : ''), actualCell(r.values[x.k], y.b), h('span', { text: y.b.expected }), stPill(y.st),
+        r.values[x.k] ? fromCell(r, r.values[x.k]) : y.b.from ? fromCell(r, { from: y.b.from, group: y.b.group }) : dash()];
+    }), 'stack ptab');
+    t.querySelector('table').id = 'bp-table';
+    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { var y = x.rows[i]; tr.setAttribute('data-res', y.r.res_id); tr.className = y.st.c === 'none' || y.st.c === 'ok' ? '' : 'r-' + y.st.c; });
+    view.appendChild(h('div', { cls: 'panel scroll' }, t));
+  }
+  function groupProblems(g) {
+    var n = 0; g.used_by.forEach(function (u) { var r = PROW[u.id]; if (!r) return; problemKeys(r).forEach(function (k) { var p = r.values[k], b = blOf(r, k); if ((p && p.group === g.gid) || (!p && b && gidOf(r, b.from === 'cluster' ? 'cluster' : 'instance', b.group) === g.gid)) n++; }); });
+    return n;
+  }
+  function pGroups(s) {
     return PGRP.filter(function (g) {
-      if (!scopeOk(g) || (XF.group.value && g.gid !== XF.group.value)) return false;
-      if (XF.engine.value && !g.used_by.some(function (u) { return BY[u.id] && BY[u.id].engine === XF.engine.value; })) return false;
-      if (XC.nondef.checked && !g.nondefault) return false;
-      if (XF.param.value && !g.values[XF.param.value]) return false;
+      if (!scopeOk(g, s) || (s.level && g.kind !== s.level)) return false;
+      if (s.engine && !g.used_by.some(function (u) { return BY[u.id] && BY[u.id].engine === s.engine; })) return false;
+      if (s.show === 'changed' && !g.nondefault) return false;
+      if (s.show === 'problems' && !groupProblems(g)) return false;
+      if (s.q && [g.name, g.family].concat(g.used_by.map(function (u) { return u.name; }), Object.keys(g.values)).join(' ').toLowerCase().indexOf(s.q) < 0) return false;
       return true;
     });
   }
-  function pDrift() {
-    var rows = pRows(), ok = {}; rows.forEach(function (x) { ok[x.r.res_id] = 1; });
-    return PDRIFT.filter(function (d) { return !XF.param.value || d.param === XF.param.value; }).map(function (d) {
-      var vs = d.values.map(function (x) { return { v: x.v, resources: x.resources.filter(function (y) { return ok[y.id]; }) }; }).filter(function (x) { return x.resources.length; });
-      return vs.length > 1 ? { section: d.section, param: d.param, values: vs } : null;
-    }).filter(Boolean);
-  }
-  function pv() { var x = hp().pv; return x === 'group' || x === 'drift' ? x : 'resource'; }
-  function valCell(x) {
-    var raw = x.v == null ? h('span', { cls: 'muted', text: '(empty)' }) : h('code', { cls: x.nondef ? 'nd' : null, text: x.v });
-    return h('span', null, raw, x.flag ? [' ', h('span', { cls: 'pill p-bad flag', text: '⚑ ' + x.flag })] : null);
-  }
-  function fromCell(r, x) {
-    var gname = x.group ? x.group.split('|').pop() : '';
-    var lbl = x.from === 'instance' ? 'instance group' : x.from === 'cluster' ? 'cluster group' : 'engine default';
-    return h('span', null, h('span', { cls: 'from from-' + x.from, text: lbl }), x.group ? [' · ', grpLink(x.group, gname)] : null);
-  }
-  function approxCell(x) { return x.approx != null ? h('span', { title: 'approximate: DBInstanceClassMemory estimated from the instance class', text: '≈ ' + Number(x.approx).toLocaleString('en-US') }) : ''; }
-  function resBlock(x) {
-    var r = x.r, res = BY[r.res_id], st = [r.apply_status, r.cluster_apply_status].filter(Boolean);
-    var meta = [h('span', null, h('code', { text: r.account }), ' ' + r.region), h('span', { text: r.engine + (r.class ? ' · ' + r.class : '') }),
-      r.cluster_name ? h('span', null, 'cluster ', r.cluster_id ? h('a', { href: hashFor(r.cluster_id), text: r.cluster_name }) : r.cluster_name) : null,
-      r.global ? h('span', null, 'global ', h('b', { text: r.global })) : null,
-      r.cluster_group ? h('span', null, 'cluster group ', grpLink(r.cluster_group)) : null,
-      r.instance_group ? h('span', null, 'instance group ', grpLink(r.instance_group)) : null,
-      st.length ? h('span', null, 'apply status ', st.map(function (s) { return [pill(s, s === 'in-sync' ? 'ok' : 'warn'), ' ']; })) : null,
-      r.section === 'oracle' && res && res.d && res.d.option_groups ? h('span', null, 'option group(s) ', list(res.d.option_groups)) : null];
-    var body = r.group_error ? h('div', { cls: 'empty pmsg', text: 'Parameter group not read: ' + r.group_error }) :
-      !x.ks.length ? h('div', { cls: 'empty pmsg', text: r.section ? 'No listed parameter returned for this resource.' : 'Engine not in lib/parameters.list.' }) :
-      table(['Parameter', 'Value', 'Approx. computed', 'Source', 'From', 'Apply type'].concat(BLON ? ['Baseline'] : []), x.ks.map(function (k) {
-        var p = r.values[k];
-        var bs = BLON ? blRes(r).filter(function (b) { return b.param === k; }) : [];
-        return [h('code', { text: k }), valCell(p), approxCell(p), v(p.src), fromCell(r, p), v(p.apply)].concat(BLON ? [bs.length ? h('span', { cls: 'bdg' }, bs.map(function (b) {
-          return h('span', null, blStatus(b), h('span', { cls: 'muted', text: ' ' + b.expected + ' ' }));
-        })) : h('span', { cls: 'muted', text: '-' })] : []);
-      }), 'stack ptab');
-    return h('div', { cls: 'panel pres' + (r.type === 'member' && r.cluster_id ? ' pmem' : '') + (BLON && r.bl && r.bl.results.length ? (blOff(r) ? ' bloff' : ' blok') : ''), 'data-res': r.res_id },
-      h('div', { cls: 'phead' }, badge(r.type), ' ', link(r.res_id, r.name), BLON ? [' ', blBadges(r, true)] : null, h('span', { cls: 'pmeta' }, meta)), body);
+  function renderGroups(view, o, s) {
+    var gs = o.grp && GBY[o.grp] ? [GBY[o.grp]] : pGroups(s);
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Parameter groups' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + gs.length + ' of ' + PGRP.length }),
+      o.grp ? h('button', { type: 'button', id: 'px-allgrp', onclick: function () { pSet({ grp: '' }); } }, 'Show all groups') : null));
+    if (!gs.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
+    var t = table(['Group', 'Level', 'Family', 'Account', 'Region', 'Changed', 'Problems', 'Used by'], gs.map(function (g) {
+      var np = groupProblems(g);
+      return [h('span', null, h('a', { href: gidHash(g.gid), 'data-grp': g.gid, text: g.name }), g.is_default ? [' ', h('span', { cls: 'pill p-warn', title: 'Insights: default parameter group in use', text: 'default group in use' })] : null,
+          g.error ? [' ', h('span', { cls: 'pill p-bad', title: g.error, text: 'could not be read' })] : null),
+        g.kind === 'cluster' ? 'Cluster group' : 'Instance group', v(g.family), h('code', { text: g.account }), g.region, String(g.nondefault),
+        np ? pill(String(np), 'bad') : pill('0', 'ok'),
+        g.used_by.length ? h('span', null, g.used_by.map(function (u, i) { return [i ? ', ' : '', h('a', { href: mkHash({ tab: 'parameters', res: u.id }), 'data-res': u.id, cls: 'ulink', text: u.name }), ' ', badge(u.type)]; })) : dash()];
+    }), 'stack pmt');
+    t.querySelector('table').id = 'px-groups';
+    view.appendChild(h('div', { cls: 'panel scroll' }, t));
+    if (gs.length === 1) {
+      var g = gs[0], ks = Object.keys(g.values).filter(function (k) { return (PA.list[g.section] || []).indexOf(k) >= 0; });
+      view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: g.name + ': values set in this group' })));
+      view.appendChild(h('div', { cls: 'panel scroll', id: 'px-gvals' }, ks.length ? table(['Parameter', 'Value', 'Set by', 'Allowed values'], ks.map(function (k) {
+        var p = g.values[k]; return [h('code', { text: k }), p.v == null ? dash() : h('code', { cls: p.src === 'user' ? 'nd' : null, text: p.v }), p.src === 'user' ? 'You (changed from default)' : 'AWS', v(p.allowed)];
+      }), 'stack') : h('div', { cls: 'empty', text: g.error ? 'Could not be read: ' + g.error : 'No listed parameter is set in this group: AWS defaults apply.' })));
+    }
   }
   function renderParams(o) {
     var view = $('view'); view.textContent = '';
     document.title = 'Parameters - RDS Inventory Explorer';
-    var mode = pv();
-    ['resource', 'group', 'drift'].forEach(function (m) { $('pv-' + m).setAttribute('aria-pressed', String(m === mode)); });
+    var mode = pv(), s = pState();
+    Object.keys(XKEY).forEach(function (k) { XF[k].value = s[k]; if (XF[k].value !== s[k]) XF[k].value = ''; });
+    if (document.activeElement !== XQ) XQ.value = o.pq || '';
+    ['resource', 'group'].forEach(function (m) { $('pv-' + m).setAttribute('aria-pressed', String(m === mode)); });
+    XF.bparam.disabled = mode === 'group';
     if (!PA.collected) {
       view.appendChild(h('div', { cls: 'panel empty', id: 'px-none', text: 'Parameters were not collected for this report. Re-run with --with-parameters (or with-parameters=true in the config file).' }));
       return;
     }
     var notes = (PA.not_collected || []).map(function (a) { return 'Parameters not collected for account ' + a + ' (data file without --with-parameters).'; }).concat(PA.notes || []);
-    view.appendChild(h('div', { cls: 'pnotes muted', id: 'px-notes' }, notes.map(function (n) { return h('div', { text: n }); })));
-    if (mode === 'group') {
-      var gs = pGroups();
-      if (o.grp && GBY[o.grp]) gs = [GBY[o.grp]];
-      view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Parameter groups' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + gs.length + ' of ' + PGRP.length }),
-        o.grp ? h('button', { type: 'button', id: 'px-allgrp', onclick: function () { go({ tab: 'parameters', pv: 'group' }); } }, 'Show all groups') : null));
-      view.appendChild(h('div', { cls: 'panel scroll' }, table(['Group', 'Type', 'Family', 'Account', 'Region', 'Non-default', 'Used by'], gs.map(function (g) {
-        return [h('span', null, h('code', { text: g.name }), g.is_default ? [' ', h('span', { cls: 'pill p-warn', title: 'Insights: Default parameter group in use', text: '⚑ default group in use' })] : null,
-            g.error ? [' ', h('span', { cls: 'pill p-bad', title: g.error, text: 'not read: ' + (g.error.match(/\(([A-Za-z]+)\)/) || [0, 'error'])[1] })] : null),
-          g.kind, v(g.family), h('code', { text: g.account }), g.region, String(g.nondefault),
-          g.used_by.length ? h('span', null, g.used_by.map(function (u, i) { return [i ? ', ' : '', link(u.id, u.name), ' ', badge(u.type)]; })) : dash()];
-      }), 'stack pmt')));
-      view.lastChild.querySelector('table').id = 'px-groups';
-      if (gs.length === 1) {
-        var g = gs[0], ks = Object.keys(g.values).filter(function (k) { return (PA.list[g.section] || []).indexOf(k) >= 0; });
-        view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: g.name + ': user / system values' })));
-        view.appendChild(h('div', { cls: 'panel scroll', id: 'px-gvals' }, ks.length ? table(['Parameter', 'Value', 'Source', 'Apply type', 'Allowed values'], ks.map(function (k) {
-          var p = g.values[k]; return [h('code', { text: k }), p.v == null ? dash() : h('code', { cls: p.src === 'user' ? 'nd' : null, text: p.v }), v(p.src), v(p.apply), v(p.allowed)];
-        }), 'stack') : h('div', { cls: 'empty', text: g.error ? 'Not read: ' + g.error : 'No listed parameter set at user / system level: engine defaults apply.' })));
-      }
-      return;
-    }
-    if (mode === 'drift') {
-      if (BLON) blDrift(view, o);
-      var ds = pDrift();
-      view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Drift within an engine family' }), h('span', { cls: 'muted', id: 'px-shown', text: ds.length + ' parameter(s) with more than one effective value' })));
-      if (!ds.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'No drift: every listed parameter has one value per engine family.' })); return; }
-      view.appendChild(h('div', { cls: 'panel scroll' }, table(['Engine family', 'Parameter', 'Value', 'Resources'], [].concat.apply([], ds.map(function (d) {
-        return d.values.map(function (x, i) { return [i ? '' : d.section, i ? '' : h('code', { text: d.param }), h('code', { text: x.v }),
-          h('span', null, x.resources.map(function (y, j) { return [j ? ', ' : '', link(y.id, y.name)]; }))]; });
-      })), 'stack pmt')));
-      view.lastChild.querySelector('table').id = 'px-drift';
-      return;
-    }
-    var rows = pRows();
-    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'By resource' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + rows.length + ' of ' + PROWS.length + ' resource(s) · effective value: instance group, then cluster group, then engine default' })));
-    if (!rows.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
-    rows.forEach(function (x) { view.appendChild(resBlock(x)); });
-    if (o.res) { var el = view.querySelector('[data-res="' + (window.CSS && CSS.escape ? CSS.escape(o.res) : o.res) + '"]'); if (el) { el.classList.add('hlres'); el.scrollIntoView(); } }
-  }
-  function blRowsSorted() {   // off-baseline resources first (severity-weighted, cluster + its members), then by name
-    var rows = pRows().map(function (x) { return x.r; }).filter(function (r) { return r.bl && r.bl.results.length; });
-    return rows.map(function (r) { var c = blCounts(r), m = memCounts(r); return { r: r, c: c, m: m, s: blScore(c) + blScore(m) }; })
-      .sort(function (a, b) { return b.s - a.s || (a.r.account + a.r.region + a.r.name).localeCompare(b.r.account + b.r.region + b.r.name); });
-  }
-  function blDrift(view, o) {
-    var xs = blRowsSorted(), off = xs.filter(function (x) { return x.c.dev > 0; });
-    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Baseline' }),
-      h('span', { cls: 'muted', id: 'bl-shown', text: off.length + ' of ' + xs.length + ' resource(s) off baseline · ' + BL.file + ' · sha256 ' + BL.sha_short + ' · ' + BL.rules + ' rule(s)' })));
-    var acc = {};
-    xs.forEach(function (x) {
-      var a = acc[x.r.account] || (acc[x.r.account] = { n: 0, off: 0, high: 0, medium: 0, low: 0 });
-      a.n++; if (x.c.dev) a.off++; a.high += x.c.high; a.medium += x.c.medium; a.low += x.c.low;
+    view.appendChild(h('details', { cls: 'pnotes muted', id: 'px-notes' }, h('summary', { text: 'Notes (' + notes.length + ')' }), notes.map(function (n) { return h('div', { text: n }); })));
+    if (PA.not_collected && PA.not_collected.length) view.lastChild.open = true;
+    view.appendChild(legend());
+    if (mode === 'group') { renderGroups(view, o, s); return; }
+    view.appendChild(blSummary());
+    if (s.bparam && BLON) { renderBp(view, s); return; }
+    var us = units(s), nres = us.reduce(function (a, u) { return a + (u.cks ? 1 : 0) + u.mem.length; }, 0);
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'By resource' }), h('span', { cls: 'muted', id: 'px-shown', text: 'Showing ' + nres + ' of ' + PROWS.length + ' resource(s) · problems first · click a row for its parameters' })));
+    if (!us.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
+    us.forEach(function (u) {
+      if (u.c) {
+        if (u.cks) view.appendChild(resPanel(u.c, u.cks, s, false));
+        else view.appendChild(h('div', { cls: 'panel pres pgrp', 'data-res': u.c.res_id, 'data-label': 'cluster' }, h('div', { cls: 'phead' }, badge('cluster'), ' ', link(u.c.res_id, u.c.name), h('span', { cls: 'pmeta' }, h('span', null, h('code', { text: u.c.account }), ' ' + u.c.region)))));
+        if (u.mem.length) {
+          var closed = !!MCLOSED[u.c.res_id] && !u.mem.some(function (m) { return m.r.res_id === o.res; }), np = u.mem.reduce(function (a, m) { return a + m.n; }, 0);
+          view.appendChild(h('div', { cls: 'mtoggle' }, h('button', { type: 'button', cls: 'linkbtn', 'data-mt': u.c.res_id, 'aria-expanded': String(!closed), onclick: function () { MCLOSED[u.c.res_id] = !closed; render(); } },
+            (closed ? '▸ show ' : '▾ hide ') + u.mem.length + ' member(s)' + (np ? ' · ' + np + ' problem(s)' : ''))));
+          if (!closed) view.appendChild(h('div', { cls: 'pmembers', 'data-cluster': u.c.res_id }, u.mem.map(function (m) { return resPanel(m.r, m.ks, s, true); })));
+        }
+      } else view.appendChild(resPanel(u.mem[0].r, u.mem[0].ks, s, false));
     });
-    view.appendChild(h('div', { cls: 'panel scroll' }, table(['Account', 'Resources checked', 'Off baseline', 'High', 'Medium', 'Low'], Object.keys(acc).sort().map(function (k) {
-      var a = acc[k];
-      return [h('code', { text: k + (profOf[k] ? ' (' + profOf[k].join(', ') + ')' : '') }), String(a.n), a.off ? pill(String(a.off), 'bad') : pill('0', 'ok'),
-        h('span', { cls: a.high ? 'sev sev-High' : 'muted', text: String(a.high) }), h('span', { cls: a.medium ? 'sev sev-Medium' : 'muted', text: String(a.medium) }), String(a.low)];
-    }), 'stack')));
-    view.lastChild.querySelector('table').id = 'bl-accounts';
-    var shown = xs.filter(function (x) { return !XC.off.checked || x.c.dev || x.m.dev; });
-    if (!shown.length) { view.appendChild(h('div', { cls: 'panel empty', id: 'bl-none', text: 'Every resource shown is on baseline.' })); }
-    var wrap = h('div', { id: 'bl-list' });
-    shown.forEach(function (x) {
-      var r = x.r, st = blTable(r, XC.off.checked);
-      wrap.appendChild(h('div', { cls: 'panel pres ' + (x.c.dev ? 'bloff' : 'blok'), 'data-res': r.res_id, 'data-bl': String(x.c.dev) },
-        h('div', { cls: 'phead' }, badge(r.type), ' ', link(r.res_id, r.name), ' ', blBadges(r, true),
-          h('span', { cls: 'pmeta' }, h('span', null, h('code', { text: r.account }), ' ' + r.region), h('span', { text: r.engine + (r.version ? ' ' + r.version : '') }),
-            r.cluster_name && r.type !== 'cluster' ? h('span', { text: 'cluster ' + r.cluster_name }) : null)), st));
-    });
-    view.appendChild(wrap);
-    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Cross-resource drift' })));
-    if (o.res) { var el = wrap.querySelector('[data-res="' + (window.CSS && CSS.escape ? CSS.escape(o.res) : o.res) + '"]'); if (el) { el.classList.add('hlres'); el.scrollIntoView(); } }
+    if (o.res) { var el = view.querySelector('.pres[data-res="' + (window.CSS && CSS.escape ? CSS.escape(o.res) : o.res) + '"]'); if (el) { el.classList.add('hlres'); el.scrollIntoView({ block: 'nearest' }); } }
   }
-  function baselineCsv() {   // same columns / rows as the script's _baseline.csv; filters, severity and off-baseline only applied
-    return csvText([CSVCOLS.baseline || []].concat([].concat.apply([], pRows().map(function (x) {
-      var rs = x.r.bl ? x.r.bl.results : [];
-      return BCSV[x.i].filter(function (c, j) { var b = rs[j]; return b && (!XF.bsev.value || b.sev === XF.bsev.value) && (!XC.off.checked || isDev(b)); });
+  function baselineCsv() {   // same columns / rows as the script's _baseline.csv, for the rows and rules on screen
+    var s = pState();
+    return csvText([CSVCOLS.baseline || []].concat([].concat.apply([], PROWS.map(function (r) {
+      var ks = keysFor(r, s); if (!ks) return [];
+      var rs = r.bl ? r.bl.results : [];
+      return BCSV[r._i].filter(function (c, j) { var b = rs[j]; return b && ks.indexOf(b.param) >= 0 && (!s.bparam || famOf(r.section) + '|' + b.param === s.bparam); });
     }))));
   }
-  function paramsCsv() {
-    var mode = pv();
-    if (mode === 'group') {
-      var o = hp(), gs = o.grp && GBY[o.grp] ? [GBY[o.grp]] : pGroups();
-      return csvText([['Account', 'Region', 'Type', 'Parameter group', 'Family', 'Default group', 'Non-default', 'Used by', 'Error']].concat(gs.map(function (g) {
-        return [g.account, g.region, g.kind, g.name, g.family || '', g.is_default ? 'yes' : 'no', String(g.nondefault), g.used_by.map(function (u) { return u.name; }).join(' '), g.error || ''];
+  function paramsCsv() {   // what is on screen
+    var s = pState(), o = hp();
+    if (pv() === 'group') {
+      var gs = o.grp && GBY[o.grp] ? [GBY[o.grp]] : pGroups(s);
+      return csvText([['Account', 'Region', 'Type', 'Parameter group', 'Family', 'Default group', 'Non-default', 'Problems', 'Used by', 'Error']].concat(gs.map(function (g) {
+        return [g.account, g.region, g.kind, g.name, g.family || '', g.is_default ? 'yes' : 'no', String(g.nondefault), String(groupProblems(g)), g.used_by.map(function (u) { return u.name; }).join(' '), g.error || ''];
       })));
     }
-    if (mode === 'drift') return csvText([['Engine family', 'Parameter', 'Value', 'Resources']].concat([].concat.apply([], pDrift().map(function (d) {
-      return d.values.map(function (x) { return [d.section, d.param, x.v, x.resources.map(function (y) { return y.name; }).join(' ')]; });
-    }))));
-    return csvText([CSVCOLS.parameters || []].concat([].concat.apply([], pRows().map(function (x) {
-      var keys = Object.keys(x.r.values); return x.ks.map(function (k) { return PCSV[x.i][keys.indexOf(k)]; });
+    if (s.bparam && BLON) {
+      var x = bpRows(s);
+      return csvText([['Account', 'Region', 'Resource', 'Resource type', 'Cluster', 'Engine', 'Version', 'Parameter', 'Actual', 'Expected', 'Status', 'Comes from']].concat(x.rows.map(function (y) {
+        var r = y.r, p = r.values[x.k], f = p || { from: y.b.from, group: y.b.group };
+        var src = f.from === 'default' ? 'AWS default' : f.from ? (f.from === 'instance' ? 'Instance group ' : 'Cluster group ') + String(f.group || '').split('|').pop() : '';
+        return [r.account, r.region, r.name, r.type, r.cluster_name || '', r.engine, (BY[r.res_id] && BY[r.res_id].version) || '', x.k, p && p.v != null ? p.v : y.b.actual != null ? y.b.actual : '', y.b.expected, y.st.t, src];
+      })));
+    }
+    var vis = {}; units(s).forEach(function (u) { if (u.c && u.cks) vis[u.c.res_id] = u.cks; u.mem.forEach(function (m) { vis[m.r.res_id] = m.ks; }); });
+    return csvText([CSVCOLS.parameters || []].concat([].concat.apply([], PROWS.map(function (r) {
+      var ks = vis[r.res_id]; if (!ks) return [];
+      var keys = Object.keys(r.values); return ks.filter(function (k) { return keys.indexOf(k) >= 0; }).map(function (k) { return PCSV[r._i][keys.indexOf(k)]; });
     }))));
   }
-  Object.keys(XF).forEach(function (k) { XF[k].addEventListener('change', render); });
-  Object.keys(XC).forEach(function (k) { XC[k].addEventListener('change', render); });
-  ['resource', 'group', 'drift'].forEach(function (m) { $('pv-' + m).addEventListener('click', function () { go({ tab: 'parameters', pv: m === 'resource' ? '' : m }); }); });
-  $('xclear').addEventListener('click', function () { Object.keys(XF).forEach(function (k) { XF[k].value = ''; }); Object.keys(XC).forEach(function (k) { XC[k].checked = false; }); go({ tab: 'parameters', pv: hp().pv }); });
-  $('px-csv').addEventListener('click', function () { download(fname('parameters' + (pv() === 'resource' ? '' : '_' + pv())), paramsCsv()); });
+  Object.keys(XF).forEach(function (k) { XF[k].addEventListener('change', function () { pSet({ res: '', cmp: '' }); }); });
+  XQ.addEventListener('input', function () { pSet({ pq: XQ.value }, true); });
+  XQ.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); XQ.value = ''; pSet({ pq: '' }, true); } });
+  ['resource', 'group'].forEach(function (m) { $('pv-' + m).addEventListener('click', function () { pSet({ pv: m === 'resource' ? '' : m, grp: '', res: '', cmp: '' }); }); });
+  $('xclear').addEventListener('click', function () { XQ.value = ''; Object.keys(XF).forEach(function (k) { XF[k].value = ''; }); go({ tab: 'parameters', pv: hp().pv === 'group' ? 'group' : '' }); });
+  $('px-csv').addEventListener('click', function () { var s = pState(); download(fname('parameters' + (pv() === 'group' ? '_group' : s.bparam && BLON ? '_' + s.bparam.replace(/[^A-Za-z0-9_.-]+/g, '_') : '')), paramsCsv()); });
   $('px-bcsv').addEventListener('click', function () { download(fname('baseline'), baselineCsv()); });
   $('tab-parameters').addEventListener('click', function () { go({ tab: 'parameters', id: hp().id }); });
   (function () {
-    var nf = 0; PROWS.forEach(function (r) { Object.keys(r.values).forEach(function (k) { if (r.values[k].flag) nf++; }); });
-    $('tab-parameters').appendChild(h('span', { cls: 'n' + (nf ? ' warn' : ''), id: 'tab-parameters-n', title: PA.collected ? nf + ' flagged value(s)' : 'not collected', text: PA.collected ? String(nf) : '–' }));
+    var np = 0; PROWS.forEach(function (r) { np += problemKeys(r).length; });
+    $('tab-parameters').appendChild(h('span', { cls: 'n' + (np ? ' warn' : ''), id: 'tab-parameters-n', title: PA.collected ? np + ' problem(s): fails the baseline or a security rule' : 'not collected', text: PA.collected ? String(np) : '–' }));
   })();
 
   /* ---------- views ---------- */
@@ -1124,8 +1223,8 @@ tr.bl-row-fail td,tr.bl-row-missing td{background:color-mix(in srgb,var(--bad-bg
   counts.appendChild(chip(C.instances, 'instance(s)  (' + C.standalone_instances + ' standalone · ' + C.cluster_members + ' cluster members)'));
   if (BL.applied) {
     var bc = chip(BL.totals.off + ' of ' + BL.totals.resources, 'off baseline  (' + BL.file + ' · sha256 ' + BL.sha_short + ')', BL.totals.off ? 'warnc bl-chip' : 'bl-chip',
-      'Parameter baseline ' + BL.file + ', sha256 ' + BL.sha256 + ', ' + BL.rules + ' rule(s). Open the baseline drift view');
-    bc.id = 'bl-chip'; bc.addEventListener('click', function () { go({ tab: 'parameters', pv: 'drift' }); }); counts.appendChild(bc);
+      'Parameter baseline ' + BL.file + ', sha256 ' + BL.sha256 + ', ' + BL.rules + ' rule(s). Show the problems in the Parameters tab');
+    bc.id = 'bl-chip'; bc.addEventListener('click', function () { go({ tab: 'parameters', sh: 'problems' }); }); counts.appendChild(bc);
   }
   if (C.pending_maintenance) counts.appendChild(chip(C.pending_maintenance, 'with pending maintenance', 'warnc'));
   if (C.errors) { var ec = chip(C.errors, 'error(s)', 'err', 'Show errors'); ec.id = 'err-chip'; ec.addEventListener('click', function () { var d = $('errors'); d.open = true; d.scrollIntoView(); }); counts.appendChild(ec); }
