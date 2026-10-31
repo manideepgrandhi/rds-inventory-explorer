@@ -1,4 +1,4 @@
-# csv.jq - CSV text for --csv, from the page's data model (model.json). Usage: jq -j --arg kind inventory|pending|insights_findings|parameters -f csv.jq
+# csv.jq - CSV text for --csv, from the page's data model (model.json). Usage: jq -j --arg kind inventory|pending|insights_findings|parameters|baseline -f csv.jq
 # Same columns, order and escaping as the page's "Export CSV" buttons (lib/explorer_template.html, csvText()):
 #   UTF-8 BOM, CRLF line ends, RFC 4180 quoting (a field with , " CR or LF is wrapped in "..." with "" for ")
 #   and a spreadsheet formula guard: a cell starting with = + - @ TAB or CR gets a leading ' (plain numbers are left alone).
@@ -13,6 +13,8 @@ if $kind == "inventory" then
       + [.resources[] | (.tags | map({key: .k, value: .v}) | from_entries) as $t | .csv + [$keys[] | $t[.] // ""]]
 elif $kind == "insights_findings" then
     [.meta.csv_columns.insights_findings] + [.insights.findings[].csv]
+elif $kind == "baseline" then
+    [.meta.csv_columns.baseline] + (.baseline.csv // [])
 elif $kind == "parameters" then
     [.meta.csv_columns.parameters] + .parameters.csv
 else

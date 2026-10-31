@@ -8,6 +8,7 @@ all-regions=true
 # include-docdb=false
 format=html,csv
 # with-parameters=true
+# baseline=~/parameters.baseline        (copy lib/parameters.baseline.example outside the release folder; none = off)
 # skip-checks=default_port,gp2_storage
 # save-data=true
 # output-dir=./reports

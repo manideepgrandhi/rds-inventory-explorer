@@ -138,6 +138,27 @@ Opt-in (`--with-parameters`, or `with-parameters=true` in the config file). Only
 - **Filters:** account, region, engine, group, parameter, non-default only, flagged only. **Export CSV** downloads the current view (formula-guarded); with no filters the By-resource CSV is byte-identical to the script's `…_parameters.csv`.
 - **Merge:** `--save-data` carries the parameter data; `--merge` validates it (group kind, names, value types). Data files without it (v2.0.0, or a run without the flag) still merge, and the tab notes "Parameters not collected for account X".
 
+## Parameter baseline (`--baseline FILE`)
+
+![Baseline drift view](docs/baseline.png)
+
+With `--with-parameters`, every resource is checked against a **baseline**: your standard values. Without `--baseline` the bundled `lib/parameters.baseline.example` is used; `--baseline none` turns it off.
+
+**Copy the file outside the release folder** before you edit it. A new release replaces the folder and your changes with it:
+
+```bash
+cp lib/parameters.baseline.example ~/parameters.baseline
+./rds_inventory_explorer.sh -A --with-parameters --baseline ~/parameters.baseline     # or baseline=~/parameters.baseline in the conf file
+```
+
+- **Format:** one rule per line, `engine-family | parameter | rule | value | severity`, `#` comments. Families: `postgres` (RDS + Aurora), `mysql` (RDS MySQL / MariaDB + Aurora), `aurora-postgresql`, `aurora-mysql`, `sqlserver`, `oracle`. Rules: `=` `!=` `in` `contains` `!contains` `>` `>=` `<` `<=` `between` (`MIN-MAX`) `set` (any value). Severity `high`, `medium` or `low`. The file is parsed as text, never sourced; a bad line stops the run with its line number (exit 1).
+- **Comparison:** booleans ignore case (`1/on/true/yes`, `0/off/false/no`); numbers compare as numbers; `{DBInstanceClassMemory…}` formulas use the approximate value (marked ≈); `contains` / `!contains` are case-insensitive list membership (`pg_stat_statements, PGAUDIT` contains `pgaudit`). PostgreSQL 18+ `log_connections` is a list: `= 1` passes for `on` / `all` or a list with `receipt`, `authentication` and `authorization`; PostgreSQL 17 and older treat it as a boolean.
+- **Status:** pass, fail, missing (no value), n/a (the engine version has no such parameter; left out on Aurora cluster rows, where the members carry the instance-level parameters), unknown (group not readable, or the value is not comparable or was not collected). Values stay cluster-aware (instance group > cluster group > default).
+- **Collection:** every parameter named in the baseline is fetched, even when `lib/parameters.list` omits it.
+- **Page:** a header chip with the file name and short sha256 opens the **Drift** view. Its Baseline section has a per-account summary, then every resource with off-baseline ones first (severity badges; clusters show the deviations of their members), and Expected / Actual / Status / Severity / From per rule. The cross-resource drift is kept below. Filters: **off-baseline only** and severity. The By-resource view has a Baseline column; each resource card has a Baseline section. **Baseline CSV** downloads the rows shown; with no filters it is byte-identical to the script's `…_baseline.csv`.
+- **Insights:** each failing rule is a finding, check id `baseline:<parameter>`. A member value inherited from the cluster group is reported once, on the cluster. Skip with `--skip-checks baseline` (all) or `baseline:<parameter>`.
+- **Merge:** `--merge` re-checks the merged data against the baseline given at merge time (default: the bundled one), so one baseline applies to every account.
+
 ## What each card shows
 
 | Card | Contents |
@@ -158,10 +179,11 @@ Opt-in (`--with-parameters`, or `with-parameters=true` in the config file). Only
 | `--include-docdb` | Also list DocumentDB and Neptune clusters. |
 | `-o, --output-dir DIR` | Output directory (default: the current directory). It is created if missing. |
 | `--prefix NAME` | File name prefix. |
-| `-F, --format LIST` | `html`, `csv` or `html,csv` (default `html`). CSV writes `…_inventory.csv`, `…_pending.csv`, `…_insights_findings.csv` (and `…_parameters.csv` with `--with-parameters`), byte-identical to the page's Export CSV buttons with no filters. |
+| `-F, --format LIST` | `html`, `csv` or `html,csv` (default `html`). CSV writes `…_inventory.csv`, `…_pending.csv`, `…_insights_findings.csv` (and `…_parameters.csv` + `…_baseline.csv` with `--with-parameters`), byte-identical to the page's Export CSV buttons with no filters. |
 | `--csv` | Same as `-F html,csv`. |
 | `--with-parameters` | Collect the Parameters tab (see above). Adds `…_parameters.csv` to `-F csv`. |
-| `--skip-checks LIST` | Insights check ids to skip (see the table above). |
+| `--baseline FILE` | Parameter baseline (default: the bundled `lib/parameters.baseline.example`; `none` to turn off). Adds `…_baseline.csv` to `-F csv`. |
+| `--skip-checks LIST` | Insights check ids to skip (see the table above), plus `baseline` or `baseline:<parameter>`. |
 | `-c, --config FILE` | key=value settings (long option names; never sourced). Command-line options override it. See `rds_inventory_explorer.conf.example`. |
 | `--tz ZONE` | Second time zone shown next to UTC (default `Asia/Kolkata`). |
 | `--aws-timeout SEC` / `--max-attempts N` | CLI connect/read timeout (default 30) and retry attempts (default 5). |
@@ -259,7 +281,7 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
   - When `node` with `puppeteer-core` on `NODE_PATH` and Chrome are available, it also runs `tests/browser_check.js`. That drives the page in headless Chrome: search suggestions, filters, the card, links, the hash, Copy JSON, the theme, the Pending tab (hash, filters, search, sort, count strip, badge navigation, empty state), CSV export (the downloaded bytes are compared with the `--csv` files, plus one real Chrome download), layout at 680 / 900 / 1280 px and mobile dark, and no JS errors or network requests.
   - It checks `--save-data` and `--merge`: the data file round trip, a merge of three files where one account appears twice (the newer file wins and the log says so), and that the merged model and CSVs match a single scan. It also checks that urgency is recomputed at merge time, that bad, HTML, old-schema, newer-schema and partial files fail with exit code 3, and that the merge makes 0 AWS calls. The merge runs in a simulated Git Bash: no `aws` on PATH, a jq that writes CRLF, a `date` without `-d`, `C:\` and `/c/` paths, and spaces in paths. The browser check is run again on the merged page.
   - **Insights:** an audit fleet (`MOCK_AUDIT=1`) where every one of the 17 checks fires, `--skip-checks` (valid and unknown ids), `-F` (html,csv / csv / bad), the findings CSV, the config file (and that it is never executed), mode 0640, and rejected merge files (bad account, path-like region, non-list data, bad errors). `tests/insights_check.js` drives the tab: totals, bars, filters, CSV export equal to the script CSV, facet click to a filtered Inventory with its chip, mobile width, no JS errors, no network. A tampered merge with `<img onerror>` and `</script>` in a name is rendered to prove nothing executes.
-  - **Parameters:** the audit fleet with `--with-parameters`: only `--source user` / `system` calls, engine defaults once per family, effective-value precedence (instance > cluster > default), system values, approximate formulas, unlisted names dropped, pending-reboot, an AccessDenied group, used-by, drift, the parameters CSV, the dry run, the config key, `--skip-checks`, merge with a file without parameters ("not collected"), group de-duplication and rejected tampered parameter data. `tests/params_check.js` drives the tab: the three views, members under clusters, effective values, card ↔ group links both ways, filters, CSV export equal to the script CSV, drift, mobile, no JS errors, no network, and a tampered merge with `<img onerror>` in a parameter value.
+  - **Parameters:** the audit fleet with `--with-parameters`: only `--source user` / `system` calls, engine defaults once per family, effective-value precedence (instance > cluster > default), system values, approximate formulas, unlisted names dropped, pending-reboot, an AccessDenied group, used-by, drift, the parameters CSV, the dry run, the config key, `--skip-checks`, merge with a file without parameters ("not collected"), group de-duplication and rejected tampered parameter data. **Baseline:** PG13 / PG16 / PG18 (`log_connections` list), `pg_tle` missing, n/a parameters, unreadable groups, bad baseline lines with their numbers, a never-executed baseline file, `--baseline none`, the conf key, `--skip-checks baseline` / `baseline:<p>`, the baseline CSV, and a merge with a different baseline (new sha256, new result); `tests/baseline_check.js` drives the page (chip, drift order, badges, rollups, filters, cards, CSV equal to the script's, mobile). `tests/params_check.js` drives the tab: the three views, members under clusters, effective values, card ↔ group links both ways, filters, CSV export equal to the script CSV, drift, mobile, no JS errors, no network, and a tampered merge with `<img onerror>` in a parameter value.
   - It checks the `--csv` files: names, mode 640, BOM, CRLF, quoting, the formula guard, and that header and values match the model (Python's `csv` module as the parser).
 - **`validate_cli.sh`** replays every command line the script issues through the real CLI, so syntax, `--query` and parameter validation are checked. It also runs negative controls, checks the mock output shapes against `--generate-cli-skeleton output`, and runs a full `-A` end to end through `tests/fake_aws_endpoint.py`. That run checks paging, that the probe skips the empty region, and that no CloudWatch, Secrets Manager or KMS request is made.
 
@@ -271,6 +293,9 @@ lib/explorer.jq                  raw AWS JSON -> page model
 lib/insights.jq                  fleet facets + findings (Insights tab, findings CSV)
 lib/parameters.jq                parameter groups -> effective values, drift, parameters CSV
 lib/parameters.list              parameters kept per engine family (edit freely)
+lib/parameters.baseline.example  default parameter baseline (copy it outside the release folder to edit)
+lib/baseline_parse.jq            baseline file -> rules + errors with line numbers
+lib/baseline.jq                  parameter rows x baseline rules -> status, summary, baseline CSV
 lib/csv.jq                       page model -> CSV (used by -F csv)
 lib/merge.jq                     saved data files -> one dataset (used by --merge)
 lib/explorer_template.html       page (CSS + JS), data placeholder /*__EXPLORER_DATA__*/
@@ -280,10 +305,18 @@ samples/sample.html              page built from the test mock (fake accounts)
 docs/screenshot.png              cluster card from the sample
 docs/insights.png                Insights tab from the sample
 docs/parameters.png              Parameters tab from the sample
-tests/                           run_tests.sh, validate_cli.sh, browser_check.js, insights_check.js, params_check.js, fake_aws_endpoint.py, mock/aws
+docs/baseline.png                baseline drift view from the sample
+tests/                           run_tests.sh, validate_cli.sh, browser_check.js, insights_check.js, params_check.js, baseline_check.js, fake_aws_endpoint.py, mock/aws
 ```
 
 ## Changelog
+
+- **2.2.0**
+  - **Parameter baseline** (`--baseline FILE`, `baseline=` in the conf; bundled default `lib/parameters.baseline.example`, `--baseline none` to turn off): pipe-separated rules (`= != in contains !contains > >= < <= between set`) with severity, checked at build time. A bad line stops the run with its line number.
+  - Normalised comparison: booleans, numbers, approximate formulas, case-insensitive list membership, PostgreSQL 18+ `log_connections` lists. Status pass / fail / missing / n/a / unknown, cluster-aware.
+  - Default baseline for PostgreSQL (`shared_preload_libraries` contains `pg_stat_statements,pgaudit,pg_tle`, SSL, scram, logging, autovacuum), MySQL (`tls_version` contains TLSv1.2 and excludes TLSv1,TLSv1.1, logging), SQL Server and Oracle. Baseline parameters are collected automatically.
+  - Page: header chip (file + sha256), Baseline section in the Drift view (per-account summary, off-baseline resources first with severity badges and cluster member rollups, expected vs actual), off-baseline-only and severity filters, Baseline column in By resource, Baseline section on cards, Baseline CSV export.
+  - Insights `baseline:<parameter>` findings (skippable); `…_baseline.csv` (formula-guarded); `--merge` re-checks with the baseline given at merge time.
 
 - **2.1.0**
   - **Parameters tab** (opt-in `--with-parameters` / `with-parameters=true`): cluster-aware effective values (instance group > cluster group > engine default), members under their clusters, global cluster membership, pending-reboot status, approximate formula values, Oracle option group note. Views by resource, by parameter group (two-way links with the cards) and drift; filters; CSV export of the current view; `…_parameters.csv`.

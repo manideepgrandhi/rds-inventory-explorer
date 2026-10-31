@@ -15,9 +15,9 @@ set -Eeuo pipefail
 umask 077 2>/dev/null || true
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_VERSION="2.2.0"
 readonly DATA_SCHEMA="rds-inventory-explorer/data" DATA_SCHEMA_VERSION=1
-# Insights audit checks (lib/insights.jq); --skip-checks takes these ids
+# Insights audit checks (lib/insights.jq); --skip-checks takes these ids, plus baseline / baseline:<parameter>
 readonly CHECK_IDS="public_access storage_not_encrypted deletion_protection_off copy_tags_off single_az backup_retention_low iam_auth_off ca_expiring auto_minor_off pi_off em_off no_log_exports default_port default_master_user old_generation gp2_storage stopped default_param_group ssl_not_forced tls_old_enabled conn_logging_off md5_password param_pending_reboot"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
@@ -29,6 +29,9 @@ MERGE_LIB="$LIB_DIR/merge.jq"
 INSIGHTS_LIB="$LIB_DIR/insights.jq"
 PARAMS_LIB="$LIB_DIR/parameters.jq"
 PARAMS_LIST="$LIB_DIR/parameters.list"
+BASELINE_LIB="$LIB_DIR/baseline.jq"
+BASELINE_PARSE="$LIB_DIR/baseline_parse.jq"
+BASELINE_DEFAULT="$LIB_DIR/parameters.baseline.example"
 
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
     echo "$SCRIPT_NAME: bash 4.4+ required (found $BASH_VERSION)" >&2; exit 2
@@ -58,6 +61,8 @@ JQ_CRLF=0
 STAMP=""
 VERBOSE=0
 SKIP_CHECKS=()
+BASELINE=""
+BL_JSON="null"
 WITH_PARAMS=0
 PARAM_MS=0
 FORMATS=()
@@ -111,6 +116,10 @@ Output:
       --csv                 Same as -F html,csv
       --skip-checks LIST    Insights audit checks to switch off, comma-separated ids:
                             ${CHECK_IDS// /, }
+                            baseline (all baseline rules) or baseline:<parameter>
+      --baseline FILE       Parameter baseline (engine-family|parameter|rule|value|severity lines; never sourced), checked
+                            with --with-parameters and at --merge. Default: lib/parameters.baseline.example; "none" = off.
+                            Adds a baseline view, Insights findings baseline:<parameter> and <prefix>_<account>_<ts>_baseline.csv
   -c, --config FILE         key=value file (long option names without --; never sourced). Options override it.
 
 Merge (offline; no AWS CLI, credentials or AWS calls needed - e.g. Git Bash on a Windows desktop):
@@ -168,6 +177,7 @@ parse_args() {
             --tz)               need_arg "$opt" $#; DISPLAY_TZ="$2"; TZ_SET=1; shift 2 ;;
             --save-data)        SAVE_DATA=1; shift ;;
             --with-parameters)  WITH_PARAMS=1; shift ;;
+            --baseline)         need_arg "$opt" $#; BASELINE="$2"; shift 2 ;;
             --merge)            MERGE=1; shift
                                 while (( $# )) && [[ "$1" != -?* ]]; do MERGE_ARGS+=("$1"); shift; done ;;
             --aws-timeout)      need_arg "$opt" $#; AWS_TIMEOUT="$2"; shift 2 ;;
@@ -209,7 +219,7 @@ load_config() {   # load_config <args...>: finds -c / --config, reads key=value 
             output-dir) OUTPUT_DIR="$v" ;; prefix) PREFIX="$v" ;; tz) DISPLAY_TZ="$v"; TZ_SET=1 ;;
             format) add_list FORMATS "$v" ;; csv) is_true "$v" && FORMATS+=(html csv) ;;
             skip-checks) add_list SKIP_CHECKS "$v" ;; save-data) is_true "$v" && SAVE_DATA=1 ;;
-            with-parameters) is_true "$v" && WITH_PARAMS=1 ;;
+            with-parameters) is_true "$v" && WITH_PARAMS=1 ;; baseline) BASELINE="$v" ;;
             aws-timeout) AWS_TIMEOUT="$v" ;; max-attempts) MAX_ATTEMPTS="$v" ;;
             *) die 1 "$f line $n: unknown key '$k'" ;;
         esac
@@ -240,6 +250,7 @@ validate() {
         case "$x" in html) WRITE_HTML=1 ;; csv) WRITE_CSV=1 ;; *) die 1 "Unknown format '$x' (html, csv)" ;; esac
     done
     for x in "${SKIP_CHECKS[@]}"; do
+        [[ "$x" == baseline || "$x" =~ ^baseline:[A-Za-z0-9_.()\ -]{1,128}$ ]] && continue
         [[ " $CHECK_IDS " == *" $x "* ]] || die 1 "Unknown check '$x' for --skip-checks (known: ${CHECK_IDS// /, })"
     done
     if [[ ! "$PROBE_PARALLEL" =~ ^[0-9]+$ ]] || (( 10#$PROBE_PARALLEL < 1 || 10#$PROBE_PARALLEL > 32 )); then die 1 "--probe-parallel must be 1-32"; fi
@@ -264,8 +275,32 @@ precheck_jq() {
     [[ -r "$INSIGHTS_LIB" ]] || die 2 "Insights library missing: $INSIGHTS_LIB"
     [[ -r "$MERGE_LIB" ]] || die 2 "Merge library missing: $MERGE_LIB"
     [[ -r "$PARAMS_LIB" ]] || die 2 "Parameters library missing: $PARAMS_LIB"
+    [[ -r "$BASELINE_LIB" && -r "$BASELINE_PARSE" ]] || die 2 "Baseline library missing: $BASELINE_LIB"
     # a native Windows jq.exe turns every LF it prints into CRLF: then the CSV is built with LF (jq adds the CR)
     if [[ "$(jq -jn '"x\n"' | wc -c | tr -d ' \r')" != 2 ]]; then CSV_EOL=$'\n' JQ_CRLF=1; log_debug "jq writes CRLF line ends; adapting"; fi
+}
+sha256_of() {   # sha256_of <file> -> hex digest (sha256sum, shasum or openssl)
+    local o
+    if command -v sha256sum >/dev/null 2>&1; then o="$(sha256sum -- "$1")"
+    elif command -v shasum >/dev/null 2>&1; then o="$(shasum -a 256 -- "$1")"
+    elif command -v openssl >/dev/null 2>&1; then o="$(openssl dgst -sha256 -r -- "$1")"
+    else o=""; fi
+    o="${o%% *}"; o="${o#\\}"; [[ "$o" =~ ^[0-9a-f]{64}$ ]] && printf '%s' "$o" || printf ''
+}
+load_baseline() {   # --baseline FILE (default: bundled example) -> BL_JSON {file, sha256, rules}; bad lines -> exit 1
+    local f="$BASELINE" out e n
+    if [[ "${f,,}" == none || "${f,,}" == off ]]; then BL_JSON="null"; log_debug "Baseline: off"; return 0; fi
+    if [[ -z "$f" ]]; then [[ -r "$BASELINE_DEFAULT" ]] || { BL_JSON="null"; return 0; }; f="$BASELINE_DEFAULT"; fi
+    f="$(win_path "${f/#\~/$HOME}")"
+    [[ -f "$f" && -r "$f" ]] || die 1 "Baseline file not readable: $BASELINE"
+    out="$(jq -Rsc -f "$BASELINE_PARSE" -- "$f" 2>/dev/null | tr -d '\r')" || die 1 "Baseline file $f could not be read as text"
+    n="$(jq -r '.errors | length' <<<"$out" | tr -d '\r')"
+    if [[ "$n" != 0 ]]; then
+        while IFS= read -r e; do log_error "Baseline $f $e"; done < <(jq -r '.errors[]' <<<"$out" | tr -d '\r')
+        die 1 "Baseline file $f has $n bad line(s); fix them or use --baseline none"
+    fi
+    BL_JSON="$(jq -c --arg file "${f##*/}" --arg sha "$(sha256_of "$f")" '{file: $file, sha256: $sha, rules: .rules}' <<<"$out" | tr -d '\r')"
+    log_info "Baseline: ${f##*/} ($(jq -r '.rules | length' <<<"$BL_JSON" | tr -d '\r') rule(s), sha256 $(jq -r '.sha256[0:12]' <<<"$BL_JSON" | tr -d '\r'))"
 }
 precheck() {
     precheck_jq
@@ -383,7 +418,10 @@ params_list_json() {   # lib/parameters.list -> {"section": ["name", ...]}
             [[ -z "$line" || "$line" == \#* ]] && continue
             if [[ "$line" =~ ^\[([a-z0-9-]+)\]$ ]]; then sec="${BASH_REMATCH[1]}"; continue; fi
             [[ -n "$sec" ]] && printf '%s\t%s\n' "$sec" "$line"
-        done <"$PARAMS_LIST"; } | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")) | group_by(.[0]) | map({key: .[0][0], value: map(.[1])}) | from_entries'
+        done <"$PARAMS_LIST"; } | jq -Rsc --argjson bl "$BL_JSON" 'split("\n") | map(select(length > 0) | split("\t"))
+            # every baseline parameter is collected too (postgres / mysql rules cover RDS and Aurora)
+            + [($bl // {rules: []}).rules[] | .param as $p | {postgres: ["postgres", "aurora-postgresql"], mysql: ["mysql", "aurora-mysql"]}[.family] // [.family] | .[] | [., $p]]
+            | group_by(.[0]) | map({key: .[0][0], value: (map(.[1]) | unique)}) | from_entries'
 }
 param_fetch() {   # param_fetch <out> <profile> <region> <op> <args...>: Parameters (filtered for $fam) -> <out>, 1 on error
     local out="$1" profile="$2" region="$3"; shift 3
@@ -581,7 +619,9 @@ build_model() {
 skip_json() { if (( ${#SKIP_CHECKS[@]} )); then printf '%s\n' "${SKIP_CHECKS[@]}" | jq -R . | jq -cs . | tr -d '\r'; else printf '[]'; fi; }
 add_insights() {   # model.json (explorer.jq) -> + Insights facets / audit findings (insights.jq) + file tag
     jq -c --slurpfile raw "$WORK/raw.json" -f "$PARAMS_LIB" "$WORK/model.json" >"$WORK/model_p.json" || die 4 "Building the parameter data failed"
-    jq -c --argjson skip "$(skip_json)" -f "$INSIGHTS_LIB" "$WORK/model_p.json" >"$WORK/model_i.json" || die 4 "Building the Insights data failed"
+    printf '%s' "$BL_JSON" >"$WORK/baseline.json"
+    jq -c --slurpfile bl "$WORK/baseline.json" -f "$BASELINE_LIB" "$WORK/model_p.json" >"$WORK/model_b.json" || die 4 "Checking the parameter baseline failed"
+    jq -c --argjson skip "$(skip_json)" -f "$INSIGHTS_LIB" "$WORK/model_b.json" >"$WORK/model_i.json" || die 4 "Building the Insights data failed"
     # accounts in file names: up to 3 joined with _, else merged_<n>_accounts
     FILE_TAG="$(jq -r '[.meta.accounts[]?.account | select(test("^[0-9]{12}$"))] | unique
         | if length == 0 then "noaccount" elif length > 3 then "merged_\(length)_accounts" else join("_") end' "$WORK/model_i.json" | tr -d '\r')"
@@ -692,6 +732,7 @@ write_outputs() {
     if (( WRITE_CSV )); then
         write_csv inventory; write_csv pending; write_csv insights_findings
         if [[ "$(jq -r '.parameters.collected' "$WORK/model.json" | tr -d '\r')" == true ]]; then write_csv parameters; fi
+        if [[ "$(jq -r '.baseline.applied' "$WORK/model.json" | tr -d '\r')" == true ]]; then write_csv baseline; fi
     fi
     if (( SAVE_DATA )); then write_data; fi
 }
@@ -786,6 +827,7 @@ merge_main() {
     precheck_jq
     local -a MERGE_FILES=(); local f i=0 l
     merge_files
+    load_baseline
     make_work
     : >"$WORK/inputs.jsonl"
     for f in "${MERGE_FILES[@]}"; do
@@ -837,6 +879,7 @@ main() {
     export AWS_PAGER="" AWS_MAX_ATTEMPTS="$MAX_ATTEMPTS" AWS_RETRY_MODE="${AWS_RETRY_MODE:-standard}"
     if (( DRY_RUN )); then dry_run_plan; exit 0; fi
     precheck
+    load_baseline
     STAMP="$(tz_date '+%Y%m%d_%H%M%S' local)"
     make_work
     : >"$WORK/errors.jsonl"

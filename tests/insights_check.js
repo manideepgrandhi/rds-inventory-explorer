@@ -48,7 +48,7 @@ const sleep = ms => new Promise(x => setTimeout(x, ms));
     ok(s.rows === F.length, 'findings table has every finding');
     const csp = await g.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content);
     ok(/default-src 'none'/.test(csp) && !/unsafe-eval/.test(csp), 'CSP default-src none');
-    const ids = new Set(F.map(f => f.check)), all = D.insights.checks.filter(c => !c.skipped).map(c => c.id);
+    const ids = new Set(F.map(f => f.check)), all = D.insights.checks.filter(c => !c.skipped && !/^baseline:/.test(c.id)).map(c => c.id);   // baseline rules fire only where the fleet is off baseline
     if (process.env.ALL_CHECKS) ok(all.every(c => ids.has(c)), 'every check fires on the audit fleet: missing ' + all.filter(c => !ids.has(c)).join(','));
     if (shots) await g.screenshot({path: path.join(shots, '01_insights.png'), fullPage: true});
     // full export == script CSV

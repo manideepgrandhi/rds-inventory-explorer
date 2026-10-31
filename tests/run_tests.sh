@@ -14,7 +14,7 @@ KEEP=0; [[ "${1:-}" == -k ]] && KEEP=1
 PASS=0; FAIL=0
 export MOCK_LOG="$OUT/aws_calls.jsonl"
 export PATH="$HERE/mock:$PATH"
-unset AWS_REGION AWS_DEFAULT_REGION AWS_PROFILE MOCK_DEFAULT_REGION MOCK_SCENARIO MOCK_AUDIT MOCK_PG_LIST_DENY
+unset AWS_REGION AWS_DEFAULT_REGION AWS_PROFILE MOCK_DEFAULT_REGION MOCK_SCENARIO MOCK_AUDIT MOCK_PG18 MOCK_PG_LIST_DENY
 export AWS_ACCESS_KEY_ID=fake-test-key-id AWS_SECRET_ACCESS_KEY=fake-test-secret AWS_SESSION_TOKEN=fake \
        AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
        AWS_ENDPOINT_URL=http://127.0.0.1:9 TMPDIR="$OUT" TZ=UTC
@@ -55,7 +55,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.1\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 2\.2\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -227,7 +227,7 @@ chk "data file written next to the HTML" test -s "$SD"
 chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
 chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data*' 2>/dev/null)"
 dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
-dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.1.0" and .merged == false'
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "2.2.0" and .merged == false'
 dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
 dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
 dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
@@ -317,7 +317,7 @@ export MOCK_AUDIT=1
 t aud 0 fleet "${FLEET[@]}" -F html,csv --save-data --with-parameters
 AUD="$(find "$OUT/aud" -name '*.html' | head -1)"; AUDF="$(find "$OUT/aud" -name '*_insights_findings.csv' | head -1)"
 chk "file names carry the account tag" test -n "$(find "$OUT/aud" -name 'rds_inventory_explorer_111111111111_222222222222_20261017_063000*' | head -1)"
-chk "-F html,csv --with-parameters writes html + 4 CSVs + data" test "$(find "$OUT/aud" -type f | wc -l)" -eq 6
+chk "-F html,csv --with-parameters writes html + 5 CSVs (incl. baseline) + data" test "$(find "$OUT/aud" -type f | wc -l)" -eq 7
 read -ra CIDS <<<"$(sed -n 's/^readonly CHECK_IDS="\(.*\)"/\1/p' "$SCRIPT")"
 for c in "${CIDS[@]}"; do jqt aud "[.insights.findings[] | select(.check == \"$c\")] | length > 0"; done
 jqt aud '.insights.findings | all(.unit_id != null and (.account | test("^[0-9]{12}$")))'
@@ -412,6 +412,59 @@ t pbadkind 3 fleet --merge "$OUT/p_badkind.json"
 jq '(.source.regions[] | select(.params != null) | .params.defaults[0].parameters[0].ParameterValue) = {"x": 1}' "$PSD" >"$OUT/p_badval.json"
 t pbadval 3 fleet --merge "$OUT/p_badval.json"
 jq '.accounts[0].account = "12345"' "$PSD" >"$OUT/p_badacct.json"; t pbadacct 3 fleet --merge "$OUT/p_badacct.json"
+
+echo "== parameter baseline"
+export MOCK_PG18=1
+t bl 0 fleet "${FLEET[@]}" --with-parameters --csv --save-data
+BLC="$(find "$OUT/bl" -name '*_baseline.csv' | head -1)"; BLH="$(find "$OUT/bl" -name '*.html' | head -1)"; BLD="$(find "$OUT/bl" -name '*_data.json' | head -1)"
+blr() { jq -c --arg n "$1" --arg p "$2" '[.parameters.rows[] | select(.name == $n) | .bl.results[] | select(.param == $p) | .status]' "$OUT/bl.json"; }
+blt() { local g; g="$(blr "$1" "$2")"; if [[ "$g" == "$3" ]]; then ok "baseline $1 $2 = $3"; else bad "baseline $1 $2: got $g expected $3"; fi; }
+jqt bl '.baseline.applied and .baseline.file == "parameters.baseline.example" and (.baseline.sha_short | test("^[0-9a-f]{12}$")) and .baseline.rules > 30'
+jqt bl '.baseline.sha256 == "'"$(sha256sum "$HERE/../lib/parameters.baseline.example" | cut -c1-64)"'"'
+blt analytics-pg18 log_connections '["pass"]'          # PG18: receipt,authentication,authorization,... list
+blt reports-pg18 log_connections '["fail"]'            # PG18: receipt only
+blt analytics-pg18 shared_preload_libraries '["pass"]' # " PGAUDIT " spaces + case
+blt pay-aurora-use1 shared_preload_libraries '["fail"]' # pg_tle missing
+jqt bl '[.parameters.rows[] | select(.name == "pay-aurora-use1") | .bl.results[] | select(.param == "shared_preload_libraries") | .why] == ["lacks pg_tle"]'
+blt legacy-apg-1 log_connections '["pass"]'           # PG13 boolean "on"
+blt legacy-apg-1 ssl_min_protocol_version '["n/a"]'   # not a PG13 parameter in the mock
+jqt bl '[.parameters.rows[] | select(.type == "cluster") | .bl.results[] | select(.status == "n/a")] == []'
+jqt bl '[.parameters.rows[] | select(.engine | test("mysql")) | .bl.results[] | select(.param == "tls_version") | .rule] | (index("contains") != null and index("!contains") != null)'
+jqt bl '[.parameters.rows[] | select(.group_error) | .bl.results[].status] | unique == ["unknown"]'
+jqt bl '[.parameters.rows[] | .bl.results[] | select(.approx != null)] | length > 0'
+jqt bl '[.parameters.rows[] | select(.type == "cluster") | .bl.members.dev] | add > 0'
+jqt bl '.baseline.totals.off == ([.parameters.rows[] | select(.bl.dev > 0)] | length) and (.baseline.accounts | length == 2)'
+jqt bl '([.insights.findings[] | select(.check | startswith("baseline:"))] | length) == ([.parameters.rows[] | .bl.results[] | select(.status == "fail" or .status == "missing")] | length) - ([.parameters.rows[] | select(.type == "member") | .bl.results[] | select((.status == "fail" or .status == "missing") and .from == "cluster")] | length)'
+chk "baseline CSV header" bash -c "head -1 '$BLC' | tr -d '\r\357\273\277' | grep -q '^Account,'"
+chk "baseline CSV rows == results" test "$(($(wc -l <"$BLC") - 1))" -eq "$(jq '[.parameters.rows[].bl.results[]] | length' "$OUT/bl.json")"
+chk "baseline CSV: no cell starts with = + - @" bash -c "! grep -hE '(^|,)\"?[=+@-][A-Za-z(<]' '$BLC'"
+chk "baseline CSV keeps the hostile pgaudit.log value as text" grep -q 'onerror' "$BLC"
+t blskip 0 fleet "${FLEET[@]}" --with-parameters --skip-checks baseline
+jqt blskip '[.insights.findings[] | select(.check | startswith("baseline:"))] == [] and .baseline.applied'
+t blskip1 0 fleet "${FLEET[@]}" --with-parameters --skip-checks baseline:log_connections
+jqt blskip1 '([.insights.findings[] | select(.check == "baseline:log_connections")] == []) and ([.insights.findings[] | select(.check | startswith("baseline:"))] | length > 0)'
+t blnone 0 fleet "${FLEET[@]}" --with-parameters --csv --baseline none
+jqt blnone '.baseline.applied == false and ([.parameters.rows[] | select(.bl != null)] == [])'
+chk "--baseline none writes no baseline CSV" test -z "$(find "$OUT/blnone" -name '*_baseline.csv')"
+t blnoparam 0 fleet "${FLEET[@]}"
+jqt blnoparam '.baseline.applied == false and (.baseline.reason | test("with-parameters"))'
+printf '# bad\npostgres|rds.force_ssl|=|1|high\npostgres|x|~|1|high\nnosql|a|=|1|low\npostgres|work_mem|>|abc|low\npostgres|w|between|9-1|low\npostgres|rds.force_ssl|=|1|high\nonly|three|fields\n' >"$OUT/bad.bl"
+t blbad 1 fleet "${FLEET[@]}" --with-parameters --baseline "$OUT/bad.bl"
+for l in 3 4 5 6 7 8; do has blbad err "line $l:"; done; hasnt blbad err "line 2:"
+chk "bad baseline writes no report" test -z "$(find "$OUT/blbad" -name '*.html' 2>/dev/null)"
+t blmiss 1 fleet "${FLEET[@]}" --with-parameters --baseline "$OUT/nope.bl"; has blmiss err "nope.bl"
+printf '$(touch %s/blpwned)\n' "$OUT" >"$OUT/inj.bl"; t blinj 1 fleet --with-parameters -P prod --baseline "$OUT/inj.bl"
+chk "baseline file is never executed" test ! -e "$OUT/blpwned"
+sed 's/pg_stat_statements,pgaudit,pg_tle/pg_stat_statements,pgaudit/' "$HERE/../lib/parameters.baseline.example" >"$OUT/my.baseline"
+printf 'profile = prod\nall_regions = yes\nbaseline = %s\n' "$OUT/my.baseline" >"$OUT/bl.conf"
+t blconf 0 fleet -c "$OUT/bl.conf" --with-parameters
+jqt blconf '.baseline.file == "my.baseline"'
+t blmerge 0 fleet --merge "$BLD" --baseline "$OUT/my.baseline"
+jqt blmerge '.baseline.file == "my.baseline" and .baseline.sha256 == "'"$(sha256sum "$OUT/my.baseline" | cut -c1-64)"'" and .baseline.sha256 != "'"$(jq -r .baseline.sha256 "$OUT/bl.json")"'"'
+jqt blmerge '[.parameters.rows[] | select(.name == "pay-aurora-use1") | .bl.results[] | select(.param == "shared_preload_libraries") | .status] == ["pass"]'
+t blmerge0 0 fleet --merge "$BLD"
+jqt blmerge0 '.baseline.sha256 == "'"$(jq -r .baseline.sha256 "$OUT/bl.json")"'"'
+unset MOCK_PG18
 unset MOCK_AUDIT
 if command -v node >/dev/null 2>&1 && node -e "require('puppeteer-core')" 2>/dev/null && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]]; then
     res="$(ALL_CHECKS=1 node "$HERE/insights_check.js" "$AUD" "$OUT/aud" ${SHOTS_INS:+"$SHOTS_INS"} 2>&1)"; rc=$?
@@ -424,6 +477,8 @@ if command -v node >/dev/null 2>&1 && node -e "require('puppeteer-core')" 2>/dev
     (( rc == 0 )) && ok "parameters tab, tampered merge: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "parameters xss: ${res:0:800}"
     res="$(NOTCOL=1 node "$HERE/params_check.js" "$(find "$OUT/pmerge" -name '*.html' | head -1)" 2>&1)"; rc=$?
     (( rc == 0 )) && ok "parameters tab, merge with a file without parameters: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks" || bad "parameters notcollected: ${res:0:800}"
+    res="$(node "$HERE/baseline_check.js" "$BLH" "$BLC" ${SHOTS_BL:+"$SHOTS_BL"} 2>&1)"; rc=$?
+    (( rc == 0 )) && ok "baseline browser: ${res}" || bad "baseline browser: ${res:0:1200}"
 else echo "  skip insights browser check"; fi
 
 echo "== browser (headless Chrome)"

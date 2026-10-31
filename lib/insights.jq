@@ -113,7 +113,19 @@ def yesno: if . == true then "on" elif . == false then "off" else "not set" end;
       | select($id != null) | f($id; $r; "\($n) = \($v.v // "(empty)") (\(if $v.from == "default" then "engine default" else "\($v.from) group, " + ($v.src // "") end))")),
      ([$p.apply_status, $p.cluster_apply_status] | map(select(. == "pending-reboot")) | if length > 0 then
         f("param_pending_reboot"; $r; "ParameterApplyStatus = pending-reboot (\(if $p.apply_status == "pending-reboot" then "instance group" else "cluster group" end))") else empty end)] as $FP
-| ($F0 + ($FP | group_by(.check, .res_id) | map(.[0] + {value: (map(.value) | unique | join("; "))}))) as $F
+# baseline findings (baseline.jq): fail / missing results, check id baseline:<parameter>, severity from the baseline file;
+# a member reports only a value it does not inherit from its cluster group (the cluster row reports that one)
+| ((.baseline.applied // false) and ($SKIP | index(["baseline"]) | not)) as $BLON
+| [if $BLON then $PROWS[] | . as $p | $RES[.res_id] as $r | select($r != null)
+     | (.bl.results // [])[] | select((.status == "fail" or .status == "missing") and ($p.type != "member" or .from != "cluster"))
+     | ("baseline:" + .param) as $id | select($SKIP | index([$id]) | not)
+     | {check: $id, sev: ({high: "High", medium: "Medium", low: "Low"}[.sev]), label: "Baseline: \(.param) \(.expected)",
+        fix: "Set \(.param) to match the baseline (\(.expected)) in \(if .group then "parameter group " + .group else "a custom parameter group" end)",
+        value: "\(.param) = \(.actual // "(no value)")\(if .approx != null then " (\u2248 \(.approx))" else "" end) (\(.status); \(if .from == "default" then "engine default" elif .from then .from + " group" else "" end))",
+        res_id: $r.id, unit_id: (if $r.type == "member" then ($r.d.cluster.id // $r.id) else $r.id end), res_name: $r.name, res_type: $r.type,
+        account: $r.account, region: $r.region, engine: $r.engine, baseline: true}
+   else empty end] as $FB
+| ($F0 + ($FP | group_by(.check, .res_id) | map(.[0] + {value: (map(.value) | unique | join("; "))})) + ($FB | group_by(.check, .res_id) | map(.[0] + {value: (map(.value) | unique | join("; ")), label: (map(.label) | unique | join("; "))}))) as $F
 | ({High: 0, Medium: 1, Low: 2}) as $SR
 | ($F | sort_by($SR[.sev], .check, .account, .region, .res_name)
       | map(. + {csv: ([.sev, .account, .region, .res_name, .res_type, .engine, .label, .value, .fix] | map(if . == null then "" else tostring end))})) as $FS
@@ -133,5 +145,10 @@ def yesno: if . == true then "on" elif . == false then "off" else "not set" end;
         gb: (if .type == "instance" then $x.AllocatedStorage elif .type == "cluster" and ($x.DBClusterInstanceClass != null) then $x.AllocatedStorage else null end)}} end)
 | .meta.csv_columns.insights_findings = ["Severity", "Account", "Region", "Resource", "Resource type", "Engine", "Check", "Current value", "Fix hint"]
 | (.parameters.collected // false) as $PC
-| .insights = {checks: [CHECKS[] | .id as $i | . + {skipped: (($SKIP | index([$i])) != null), not_run: ((.params // false) and ($PC | not))}], findings: $FS, skipped: $SKIP,
+| .insights = {checks: ([CHECKS[] | .id as $i | . + {skipped: (($SKIP | index([$i])) != null), not_run: ((.params // false) and ($PC | not))}]
+                       + [if .baseline.applied then (.baseline.rule_list | group_by(.param)[] | ("baseline:" + .[0].param) as $i
+                           | {id: $i, sev: ({high: "High", medium: "Medium", low: "Low"}[map(.sev) | min_by({high: 0, medium: 1, low: 2}[.])]),
+                              label: "Baseline: \(.[0].param)", params: true, baseline: true,
+                              skipped: ((($SKIP | index(["baseline"])) != null) or (($SKIP | index([$i])) != null)), not_run: false})
+                         else empty end]), findings: $FS, skipped: $SKIP,
                omitted: ["Engine version in Extended Support: describe-db-* only shows the lifecycle enrollment setting, not whether the version is past standard support, so it is not checked."]}

@@ -146,6 +146,13 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
 code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:4px}
 .flag{font-size:11.5px}.from{font-size:12px}.from-instance{color:var(--i)}.from-cluster{color:var(--c)}.from-default{color:var(--muted)}
 .ptab td:nth-child(1){white-space:nowrap}
+.bl{display:inline-block;padding:0 7px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.bl-pass{background:var(--ok-bg);color:var(--ok)}.bl-fail{background:var(--bad-bg);color:var(--bad)}.bl-missing{background:var(--warn-bg);color:var(--warn)}
+.bl-na,.bl-unknown{background:var(--panel2);color:var(--muted)}
+.bdg{display:inline-flex;gap:4px;align-items:center}.bdg .pill{font-size:11.5px}.bdg-mem{color:var(--muted);font-size:12px}
+.bloff{border-left:3px solid var(--bad)}.blok{border-left:3px solid var(--ok)}
+tr.bl-row-fail td,tr.bl-row-missing td{background:color-mix(in srgb,var(--bad-bg) 55%,transparent)}
+.chip.bl-chip{cursor:pointer;white-space:normal}
 @media (max-width:760px){.pmem{margin-left:12px}.seg{flex-wrap:wrap}}
 @media (max-width:700px){dl{grid-template-columns:1fr}dt{margin-top:6px}}
 </style>
@@ -208,8 +215,11 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
   <select id="xf-param" aria-label="Parameter"></select>
   <label class="chk"><input type="checkbox" id="xf-nondef"> non-default only</label>
   <label class="chk"><input type="checkbox" id="xf-flag"> flagged only</label>
+  <label class="chk" id="xf-off-wrap"><input type="checkbox" id="xf-off"> off-baseline only</label>
+  <select id="xf-bsev" aria-label="Baseline severity"></select>
   <button type="button" id="xclear">Clear</button>
   <button type="button" id="px-csv" class="export" title="Download the current Parameters view (filters) as CSV">Export CSV</button>
+  <button type="button" id="px-bcsv" class="export" title="Download the baseline results shown (filters) as CSV - same columns as the script's _baseline.csv">Baseline CSV</button>
 </div>
 <main>
   <div id="view"></div>
@@ -439,6 +449,7 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
           ['Replication source', mono(d.replication_source)], ['Log exports', list(d.logs_exports, function (x) { return x; })],
           ['Activity stream', v(d.activity_stream)], ['Engine lifecycle', v(d.engine_lifecycle)], ['Created', when(d.created)],
           ['Resource id', mono(d.resource_id)], ['ARN', mono(r.id)]])),
+        blSection(r),
         sec('Tags', tagsBlock(r.tags), true)));
   }
 
@@ -469,6 +480,7 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
           ['Option group(s)', list(d.option_groups)], ['License', v(d.license)], ['Engine lifecycle', v(d.engine_lifecycle)], ['Created', when(d.created)],
           ['Database name', v(d.database_name)], ['Resource id', mono(d.resource_id)]])),
         sec('Pending maintenance', pendingTable(pend, false), true),
+        blSection(r),
         sec('Tags', tagsBlock(r.tags), true)));
   }
 
@@ -785,7 +797,66 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
   var PCSV = [], pOff = 0;   // the script's CSV rows (lib/parameters.jq) for each resource row, same order
   PROWS.forEach(function (r) { var n = Object.keys(r.values).length; PCSV.push((PA.csv || []).slice(pOff, pOff + n)); pOff += n; });
   var XF = { account: $('xf-account'), region: $('xf-region'), engine: $('xf-engine'), group: $('xf-group'), param: $('xf-param') };
-  var XC = { nondef: $('xf-nondef'), flagged: $('xf-flag') };
+  var XC = { nondef: $('xf-nondef'), flagged: $('xf-flag'), off: $('xf-off') };
+  /* baseline (lib/baseline.jq): per-row results {param, expected, actual, status, sev, from, group}; dev = fail + missing */
+  var BL = DATA.baseline || { applied: false }, BLON = !!BL.applied, PROW = {};
+  PROWS.forEach(function (r) { PROW[r.res_id] = r; });
+  var BCSV = [], bOff = 0;   // the script's baseline CSV rows for each resource row, same order
+  PROWS.forEach(function (r) { var n = r.bl ? r.bl.results.length : 0; BCSV.push((BL.csv || []).slice(bOff, bOff + n)); bOff += n; });
+  XF.bsev = $('xf-bsev');
+  XF.bsev.appendChild(h('option', { value: '', text: 'All baseline severities' }));
+  ['high', 'medium', 'low'].forEach(function (x) { XF.bsev.appendChild(h('option', { value: x, text: 'Baseline: ' + x + ' only' })); });
+  if (!BLON) { $('xf-off-wrap').hidden = true; XF.bsev.hidden = true; $('px-bcsv').hidden = true; }
+  var BLSEV = { high: 'High', medium: 'Medium', low: 'Low' };
+  function isDev(x) { return x.status === 'fail' || x.status === 'missing'; }
+  function blRes(r) { return r && r.bl ? r.bl.results.filter(function (x) { return !XF.bsev.value || x.sev === XF.bsev.value; }) : []; }
+  function blCounts(r) {   // {high, medium, low, dev} under the severity filter
+    var c = { high: 0, medium: 0, low: 0, dev: 0 };
+    blRes(r).forEach(function (x) { if (isDev(x)) { c[x.sev]++; c.dev++; } });
+    return c;
+  }
+  function memCounts(r) {   // a cluster row: its members' deviations rolled up
+    var c = { high: 0, medium: 0, low: 0, dev: 0, resources: 0 };
+    if (r.type !== 'cluster') return c;
+    PROWS.forEach(function (m) { if (m.cluster_id === r.res_id) { var k = blCounts(m); if (k.dev) c.resources++; ['high', 'medium', 'low', 'dev'].forEach(function (s) { c[s] += k[s]; }); } });
+    return c;
+  }
+  function blScore(c) { return c.high * 10000 + c.medium * 100 + c.low; }
+  function blOff(r) { return blCounts(r).dev > 0 || memCounts(r).dev > 0; }
+  function blStatus(x) {
+    var cls = x.status === 'n/a' ? 'na' : x.status;
+    var t = x.status === 'pass' ? '✓ pass' : x.status === 'fail' ? '✗ fail' : x.status;
+    return h('span', { cls: 'bl bl-' + cls, title: (x.why ? x.why + ' · ' : '') + 'baseline line ' + x.line + ': ' + x.expected, text: t });
+  }
+  function blBadges(r, withMembers) {
+    var c = blCounts(r), m = withMembers ? memCounts(r) : null, out = [];
+    if (!r.bl || !r.bl.results.length) return h('span', { cls: 'muted', text: 'no baseline rules' });
+    ['high', 'medium', 'low'].forEach(function (s) { if (c[s]) out.push(h('span', { cls: 'pill ' + (s === 'high' ? 'p-bad' : s === 'medium' ? 'p-warn' : 'p-mute'), title: c[s] + ' ' + s + ' severity deviation(s)', text: c[s] + ' ' + s })); });
+    if (!c.dev) out.push(h('span', { cls: 'pill p-ok', text: 'on baseline' }));
+    if (m && m.dev) out.push(h('span', { cls: 'bdg-mem', title: 'deviations in member instances (high ' + m.high + ', medium ' + m.medium + ', low ' + m.low + ')', text: '+ ' + m.dev + ' in ' + m.resources + ' member(s)' }));
+    return h('span', { cls: 'bdg', 'data-bl-dev': String(c.dev) }, out);
+  }
+  function actualCell(x) {
+    return h('span', null, x.actual == null ? h('span', { cls: 'muted', text: x.status === 'n/a' ? '-' : '(no value)' }) : h('code', { text: x.actual }),
+      x.approx != null ? h('span', { cls: 'muted', text: ' ≈ ' + Number(x.approx).toLocaleString('en-US') }) : null);
+  }
+  function blTable(r, offOnly) {
+    var rs = blRes(r).filter(function (x) { return !offOnly || isDev(x); });
+    if (!rs.length) return h('div', { cls: 'empty pmsg', text: offOnly ? 'On baseline for the rules shown.' : 'No baseline rule for this engine.' });
+    var t = table(['Parameter', 'Expected', 'Actual', 'Status', 'Severity', 'From'], rs.map(function (x) {
+      return [h('code', { text: x.param }), h('span', { text: x.expected }), actualCell(x), blStatus(x), h('span', { cls: 'sev sev-' + BLSEV[x.sev], text: BLSEV[x.sev] }),
+        x.from ? fromCell(r, { from: x.from, group: x.group ? gidOf(r, x.from === 'cluster' ? 'cluster' : 'instance', x.group) : null }) : dash()];
+    }), 'stack ptab bltab');
+    Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr, i) { tr.className = 'bl-row-' + (rs[i].status === 'n/a' ? 'na' : rs[i].status); });
+    return t;
+  }
+  function blSection(res) {   // the Baseline section of a resource card
+    if (!BLON) return null;
+    var r = PROW[res.id];
+    if (!r) return sec('Baseline', h('span', { cls: 'muted', text: 'No parameter data for this resource.' }), true);
+    return sec('Baseline', h('div', { id: 'card-bl' }, h('div', { cls: 'bdg' }, blBadges(r, true), ' ',
+      h('a', { href: mkHash({ tab: 'parameters', pv: 'drift', res: r.res_id }), text: 'baseline drift view' })), blTable(r, false)), true);
+  }
   opts(XF.account, 'accounts', uniq(PROWS.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
   opts(XF.region, 'regions', uniq(PROWS.map(function (r) { return r.region; })).map(function (x) { return [x, x]; }));
   opts(XF.engine, 'engines', uniq(PROWS.map(function (r) { return r.engine; })).map(function (x) { return [x, x]; }));
@@ -804,6 +875,7 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
     return PROWS.map(function (r, i) {
       if (!scopeOk(r) || (XF.engine.value && r.engine !== XF.engine.value)) return null;
       if (XF.group.value && r.cluster_group !== XF.group.value && r.instance_group !== XF.group.value) return null;
+      if (BLON && XC.off.checked && !blOff(r)) return null;
       var ks = Object.keys(r.values).filter(function (k) {
         var x = r.values[k];
         return (!XF.param.value || k === XF.param.value) && (!XC.nondef.checked || x.nondef) && (!XC.flagged.checked || x.flag);
@@ -850,12 +922,15 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
       r.section === 'oracle' && res && res.d && res.d.option_groups ? h('span', null, 'option group(s) ', list(res.d.option_groups)) : null];
     var body = r.group_error ? h('div', { cls: 'empty pmsg', text: 'Parameter group not read: ' + r.group_error }) :
       !x.ks.length ? h('div', { cls: 'empty pmsg', text: r.section ? 'No listed parameter returned for this resource.' : 'Engine not in lib/parameters.list.' }) :
-      table(['Parameter', 'Value', 'Approx. computed', 'Source', 'From', 'Apply type'], x.ks.map(function (k) {
+      table(['Parameter', 'Value', 'Approx. computed', 'Source', 'From', 'Apply type'].concat(BLON ? ['Baseline'] : []), x.ks.map(function (k) {
         var p = r.values[k];
-        return [h('code', { text: k }), valCell(p), approxCell(p), v(p.src), fromCell(r, p), v(p.apply)];
+        var bs = BLON ? blRes(r).filter(function (b) { return b.param === k; }) : [];
+        return [h('code', { text: k }), valCell(p), approxCell(p), v(p.src), fromCell(r, p), v(p.apply)].concat(BLON ? [bs.length ? h('span', { cls: 'bdg' }, bs.map(function (b) {
+          return h('span', null, blStatus(b), h('span', { cls: 'muted', text: ' ' + b.expected + ' ' }));
+        })) : h('span', { cls: 'muted', text: '-' })] : []);
       }), 'stack ptab');
-    return h('div', { cls: 'panel pres' + (r.type === 'member' && r.cluster_id ? ' pmem' : ''), 'data-res': r.res_id },
-      h('div', { cls: 'phead' }, badge(r.type), ' ', link(r.res_id, r.name), h('span', { cls: 'pmeta' }, meta)), body);
+    return h('div', { cls: 'panel pres' + (r.type === 'member' && r.cluster_id ? ' pmem' : '') + (BLON && r.bl && r.bl.results.length ? (blOff(r) ? ' bloff' : ' blok') : ''), 'data-res': r.res_id },
+      h('div', { cls: 'phead' }, badge(r.type), ' ', link(r.res_id, r.name), BLON ? [' ', blBadges(r, true)] : null, h('span', { cls: 'pmeta' }, meta)), body);
   }
   function renderParams(o) {
     var view = $('view'); view.textContent = '';
@@ -890,6 +965,7 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
       return;
     }
     if (mode === 'drift') {
+      if (BLON) blDrift(view, o);
       var ds = pDrift();
       view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Drift within an engine family' }), h('span', { cls: 'muted', id: 'px-shown', text: ds.length + ' parameter(s) with more than one effective value' })));
       if (!ds.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'No drift: every listed parameter has one value per engine family.' })); return; }
@@ -905,6 +981,46 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
     if (!rows.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the filters.' })); return; }
     rows.forEach(function (x) { view.appendChild(resBlock(x)); });
     if (o.res) { var el = view.querySelector('[data-res="' + (window.CSS && CSS.escape ? CSS.escape(o.res) : o.res) + '"]'); if (el) { el.classList.add('hlres'); el.scrollIntoView(); } }
+  }
+  function blRowsSorted() {   // off-baseline resources first (severity-weighted, cluster + its members), then by name
+    var rows = pRows().map(function (x) { return x.r; }).filter(function (r) { return r.bl && r.bl.results.length; });
+    return rows.map(function (r) { var c = blCounts(r), m = memCounts(r); return { r: r, c: c, m: m, s: blScore(c) + blScore(m) }; })
+      .sort(function (a, b) { return b.s - a.s || (a.r.account + a.r.region + a.r.name).localeCompare(b.r.account + b.r.region + b.r.name); });
+  }
+  function blDrift(view, o) {
+    var xs = blRowsSorted(), off = xs.filter(function (x) { return x.c.dev > 0; });
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Baseline' }),
+      h('span', { cls: 'muted', id: 'bl-shown', text: off.length + ' of ' + xs.length + ' resource(s) off baseline · ' + BL.file + ' · sha256 ' + BL.sha_short + ' · ' + BL.rules + ' rule(s)' })));
+    var acc = {};
+    xs.forEach(function (x) {
+      var a = acc[x.r.account] || (acc[x.r.account] = { n: 0, off: 0, high: 0, medium: 0, low: 0 });
+      a.n++; if (x.c.dev) a.off++; a.high += x.c.high; a.medium += x.c.medium; a.low += x.c.low;
+    });
+    view.appendChild(h('div', { cls: 'panel scroll' }, table(['Account', 'Resources checked', 'Off baseline', 'High', 'Medium', 'Low'], Object.keys(acc).sort().map(function (k) {
+      var a = acc[k];
+      return [h('code', { text: k + (profOf[k] ? ' (' + profOf[k].join(', ') + ')' : '') }), String(a.n), a.off ? pill(String(a.off), 'bad') : pill('0', 'ok'),
+        h('span', { cls: a.high ? 'sev sev-High' : 'muted', text: String(a.high) }), h('span', { cls: a.medium ? 'sev sev-Medium' : 'muted', text: String(a.medium) }), String(a.low)];
+    }), 'stack')));
+    view.lastChild.querySelector('table').id = 'bl-accounts';
+    var shown = xs.filter(function (x) { return !XC.off.checked || x.c.dev || x.m.dev; });
+    if (!shown.length) { view.appendChild(h('div', { cls: 'panel empty', id: 'bl-none', text: 'Every resource shown is on baseline.' })); }
+    var wrap = h('div', { id: 'bl-list' });
+    shown.forEach(function (x) {
+      var r = x.r, st = blTable(r, XC.off.checked);
+      wrap.appendChild(h('div', { cls: 'panel pres ' + (x.c.dev ? 'bloff' : 'blok'), 'data-res': r.res_id, 'data-bl': String(x.c.dev) },
+        h('div', { cls: 'phead' }, badge(r.type), ' ', link(r.res_id, r.name), ' ', blBadges(r, true),
+          h('span', { cls: 'pmeta' }, h('span', null, h('code', { text: r.account }), ' ' + r.region), h('span', { text: r.engine + (r.version ? ' ' + r.version : '') }),
+            r.cluster_name && r.type !== 'cluster' ? h('span', { text: 'cluster ' + r.cluster_name }) : null)), st));
+    });
+    view.appendChild(wrap);
+    view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Cross-resource drift' })));
+    if (o.res) { var el = wrap.querySelector('[data-res="' + (window.CSS && CSS.escape ? CSS.escape(o.res) : o.res) + '"]'); if (el) { el.classList.add('hlres'); el.scrollIntoView(); } }
+  }
+  function baselineCsv() {   // same columns / rows as the script's _baseline.csv; filters, severity and off-baseline only applied
+    return csvText([CSVCOLS.baseline || []].concat([].concat.apply([], pRows().map(function (x) {
+      var rs = x.r.bl ? x.r.bl.results : [];
+      return BCSV[x.i].filter(function (c, j) { var b = rs[j]; return b && (!XF.bsev.value || b.sev === XF.bsev.value) && (!XC.off.checked || isDev(b)); });
+    }))));
   }
   function paramsCsv() {
     var mode = pv();
@@ -926,6 +1042,7 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
   ['resource', 'group', 'drift'].forEach(function (m) { $('pv-' + m).addEventListener('click', function () { go({ tab: 'parameters', pv: m === 'resource' ? '' : m }); }); });
   $('xclear').addEventListener('click', function () { Object.keys(XF).forEach(function (k) { XF[k].value = ''; }); Object.keys(XC).forEach(function (k) { XC[k].checked = false; }); go({ tab: 'parameters', pv: hp().pv }); });
   $('px-csv').addEventListener('click', function () { download(fname('parameters' + (pv() === 'resource' ? '' : '_' + pv())), paramsCsv()); });
+  $('px-bcsv').addEventListener('click', function () { download(fname('baseline'), baselineCsv()); });
   $('tab-parameters').addEventListener('click', function () { go({ tab: 'parameters', id: hp().id }); });
   (function () {
     var nf = 0; PROWS.forEach(function (r) { Object.keys(r.values).forEach(function (k) { if (r.values[k].flag) nf++; }); });
@@ -1005,6 +1122,11 @@ code.nd{background:var(--warn-bg);color:var(--warn);padding:0 4px;border-radius:
   counts.appendChild(chip(C.global_clusters, 'global cluster(s)'));
   counts.appendChild(chip(C.clusters, 'cluster(s)'));
   counts.appendChild(chip(C.instances, 'instance(s)  (' + C.standalone_instances + ' standalone · ' + C.cluster_members + ' cluster members)'));
+  if (BL.applied) {
+    var bc = chip(BL.totals.off + ' of ' + BL.totals.resources, 'off baseline  (' + BL.file + ' · sha256 ' + BL.sha_short + ')', BL.totals.off ? 'warnc bl-chip' : 'bl-chip',
+      'Parameter baseline ' + BL.file + ', sha256 ' + BL.sha256 + ', ' + BL.rules + ' rule(s). Open the baseline drift view');
+    bc.id = 'bl-chip'; bc.addEventListener('click', function () { go({ tab: 'parameters', pv: 'drift' }); }); counts.appendChild(bc);
+  }
   if (C.pending_maintenance) counts.appendChild(chip(C.pending_maintenance, 'with pending maintenance', 'warnc'));
   if (C.errors) { var ec = chip(C.errors, 'error(s)', 'err', 'Show errors'); ec.id = 'err-chip'; ec.addEventListener('click', function () { var d = $('errors'); d.open = true; d.scrollIntoView(); }); counts.appendChild(ec); }
   if (ERR.length) {

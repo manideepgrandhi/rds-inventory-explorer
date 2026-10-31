@@ -265,6 +265,10 @@ elif SCEN != "empty":
           CL.append(cluster("legacy-apg", "aurora-postgresql", "13.18", [("legacy-apg-1", True)], tg=tags("dev", "legacy", "legacy"), status="stopped",
                           enc=False, ctag=False, user="postgres", ret=3, iam=False))
           INS.append(inst("legacy-apg-1", "aurora-postgresql", "13.18", "db.r4.large", cluster="legacy-apg", status="stopped", enc=False, mon=0, pi=False))
+        # PostgreSQL 18 log_connections list values (MOCK_PG18=1): all three stages (pass) and receipt only (fail)
+        if os.environ.get("MOCK_PG18") == "1":
+          INS.append(inst("analytics-pg18", "postgres", "18.1", "db.r7g.large", tg=tags("prod", "analytics", "analytics"), pg="analytics-pg18"))
+          INS.append(inst("reports-pg18", "postgres", "18.1", "db.r7g.large", tg=tags("prod", "analytics", "reports"), pg="reports-pg18"))
         PMA += [{"ResourceIdentifier": arn("db", "qa-mysql"), "PendingMaintenanceActionDetails": [   # no date at all
                     {"Action": "db-upgrade", "Description": "Upgrade to MySQL 8.0.42"}]}]
 
@@ -273,6 +277,7 @@ FAMILY = {"default.aurora-postgresql": "aurora-postgresql16", "default.postgres"
           "default.aurora-mysql": "aurora-mysql8.0", "default.mysql": "mysql8.0", "pay-apg16-instance": "aurora-postgresql16",
           "pay-apg16-cluster": "aurora-postgresql16", "aurora-postgresql-custom": "aurora-postgresql13", "aurora-mysql-custom": "aurora-mysql8.0",
           "orders-mysql80": "aurora-mysql8.0", "ledger-pg16": "postgres16", "crm-pg16": "postgres16", "qa-mysql80": "mysql8.0",
+          "analytics-pg18": "postgres18", "reports-pg18": "postgres18",
           "docdb-custom": "docdb5.0", "default.docdb": "docdb5.0"}
 CLUSTER_GROUPS = {"pay-apg16-cluster", "aurora-postgresql-custom", "aurora-mysql-custom", "ledger-pg16", "docdb-custom"}
 
@@ -294,12 +299,20 @@ PG_DEF = [P("rds.force_ssl", "1", "engine-default", dtype="boolean", allowed="0,
           P("effective_cache_size", "{DBInstanceClassMemory*3/32768}", "engine-default", dtype="integer"),
           P("work_mem", "4096", "engine-default", dtype="integer"), P("max_connections", "LEAST({DBInstanceClassMemory/9531392},5000)", "engine-default", "static", "integer"),
           P("autovacuum", "1", "engine-default", dtype="boolean"), P("log_statement", "none", "engine-default"), P("random_page_cost", "4", "engine-default", dtype="real"),
-          P("unlisted_param", "x", "engine-default")]
+          P("unlisted_param", "x", "engine-default"),
+          # baseline probes (instance level on Aurora)
+          P("log_disconnections", "0", "engine-default", dtype="boolean"), P("log_lock_waits", "0", "engine-default", dtype="boolean"),
+          P("log_min_duration_statement", "-1", "engine-default", dtype="integer"), P("autovacuum_max_workers", "{DBInstanceClassMemory/32212254720}", "engine-default", dtype="integer"),
+          P("track_io_timing", "1", "engine-default", dtype="boolean"), P("idle_in_transaction_session_timeout", "86400000", "engine-default", dtype="integer"),
+          P("track_activity_query_size", "4096", "engine-default", "static", "integer")]
+SSL_MIN = [P("ssl_min_protocol_version", "TLSv1.2", "engine-default", allowed="TLSv1,TLSv1.1,TLSv1.2,TLSv1.3")]   # PG 12+ only in this mock: absent from the PG13 family -> n/a
 DEFAULTS = {
-    ("cluster", "aurora-postgresql16"): PG_DEF[:3] + [P("shared_preload_libraries", "pg_stat_statements", "engine-default", "static"), P("apg_plan_mgmt.capture_plan_baselines", "off", "engine-default")],
+    ("cluster", "aurora-postgresql16"): PG_DEF[:3] + SSL_MIN + [P("shared_preload_libraries", "pg_stat_statements", "engine-default", "static"), P("apg_plan_mgmt.capture_plan_baselines", "off", "engine-default")],
     ("instance", "aurora-postgresql16"): PG_DEF[3:],
     ("cluster", "aurora-postgresql13"): PG_DEF[:3], ("instance", "aurora-postgresql13"): PG_DEF[3:],
-    ("instance", "postgres16"): PG_DEF + [P("wal_keep_size", "2048", "engine-default", dtype="integer")], ("cluster", "postgres16"): PG_DEF,
+    ("instance", "postgres16"): PG_DEF + SSL_MIN + [P("wal_keep_size", "2048", "engine-default", dtype="integer")], ("cluster", "postgres16"): PG_DEF,
+    ("instance", "postgres18"): [P("log_connections", "", "engine-default", allowed="receipt,authentication,authorization,setup_durations,all") if p["ParameterName"] == "log_connections" else p
+                                 for p in PG_DEF] + SSL_MIN,
     ("instance", "sqlserver-se-15.0"): [P("rds.force_ssl", "0", "engine-default", "static"), P("rds.tls10", "default", "engine-default", "static"),
                                         P("rds.tls11", "default", "engine-default", "static"), P("max degree of parallelism", "0", "engine-default", dtype="integer"),
                                         P("max server memory (mb)", "{DBInstanceClassMemory/1048576}", "engine-default", dtype="integer")],
@@ -320,6 +333,12 @@ GROUP_VALUES = {   # (group, source) -> parameters
     ("ledger-pg16", "user"): [P("rds.force_ssl", "1", "user"), P("log_connections", "1", "user"), P("work_mem", "16384", "user", dtype="integer")],
     ("crm-pg16", "user"): [P("password_encryption", "md5", "user"), P("work_mem", "8192", "user", dtype="integer"), P("rds.force_ssl", "1", "user"),
                            P("log_connections", "1", "user"), P("unlisted_param", "y", "user")],
+    ("aurora-postgresql-custom", "user"): [P("log_connections", "on", "user", dtype="boolean")],
+    ("analytics-pg18", "user"): [P("log_connections", "receipt,authentication,authorization", "user"), P("rds.force_ssl", "1", "user"),
+                                 P("shared_preload_libraries", "pg_stat_statements, PGAUDIT ,pg_tle", "user", "static"), P("pgaudit.log", "ddl", "user"),
+                                 P("log_min_duration_statement", "2000", "user", dtype="integer")],
+    ("reports-pg18", "user"): [P("log_connections", "receipt", "user"), P("rds.force_ssl", "1", "user"),
+                               P("pgaudit.log", "</script><img src=x onerror=alert(1)>", "user")],
     ("default.sqlserver-se", "system"): [P("rds.tls10", "enabled", "system", "static"), P("rds.tls11", "enabled", "system", "static")],
     ("default.aurora-postgresql", "system"): [P("work_mem", "4096", "system", dtype="integer")]}
 if OP in ("describe-db-parameter-groups", "describe-db-cluster-parameter-groups"):
